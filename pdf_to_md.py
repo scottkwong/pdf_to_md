@@ -24,25 +24,76 @@ from tenacity import (
 from tqdm import tqdm
 from typing import List, Union
 
+# Model handler registry
+class ModelRegistry:
+    def __init__(self):
+        self._registry = {}
+
+    def register(self, name):
+        def decorator(func):
+            self._registry[name] = func
+            return func
+        return decorator
+
+    def get(self, name):
+        if name not in self._registry:
+            raise ValueError(f"Model '{name}' not supported.")
+        return self._registry[name]
+
+
+model_registry = ModelRegistry()
+
 # Setup OpenAI client
 load_dotenv()
 openai_key = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=openai_key)
 
 
+@model_registry.register("gpt-4o")
+def _handle_gpt4o(client: OpenAI, messages: list) -> str:
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=messages,
+        max_tokens=4096,
+    )
+    return response.choices[0].message.content
+
+
+@model_registry.register("o1")
+def _handle_o1(client: OpenAI, messages: list) -> str:
+    response = client.chat.completions.create(
+        model="o1",
+        messages=messages,
+        max_tokens=4096,
+    )
+    return response.choices[0].message.content
+
+
+@model_registry.register("o4-mini")
+def _handle_o4_mini(client: OpenAI, messages: list) -> str:
+    response = client.chat.completions.create(
+        model="o4-mini",
+        messages=messages,
+        max_tokens=4096,
+    )
+    return response.choices[0].message.content
+
+
 def pdf_to_markdown(
-        pdf_path: str, 
+        pdf_path: str,
         output_dir: str,
         mode: str = "vt",
-        verbose: bool = True
+        verbose: bool = True,
+        model_name: str = "gpt-4o",
     ) -> str:
     """
-    Main function to convert a PDF to Markdown using GPT-4o visual reasoning.
+    Main function to convert a PDF to Markdown using an OpenAI model.
 
     This function takes a path to a PDF file, an output directory, a mode
     indicating whether to use 'vision-only' (v) or 'vision-and-text' (vt) 
-    processing, and a verbose flag. It converts the PDF to images, processes 
-    each image with GPT-4o to generate markdown text, and writes the markdown 
+    processing, a model name, and a verbose flag. It converts the PDF to images,
+    processes each image with the selected model to generate markdown text, and
+    writes the markdown
     text to a file with the same name as the PDF file but with a .md extension, 
     located in the output directory. If verbose is True, it also prints the 
     markdown text to the screen.
@@ -53,6 +104,7 @@ def pdf_to_markdown(
         mode: The processing mode ('v' for vision-only, 'vt' for 
             vision-and-text).
         verbose: If True, print the markdown text to the screen.
+        model_name: The OpenAI model to use (default 'gpt-4o').
 
     Returns:
         output_file_path
@@ -89,7 +141,9 @@ def pdf_to_markdown(
     markdown_content = []
     for ix, (image, prior_text) in enumerate(tqdm(zip(images, prior_texts))):
         image_base64 = _pdf_image_to_base64_str(image)
-        markdown_text = _process_image_with_gpt4(image_base64, prior_text)
+        markdown_text = _process_image_with_model(
+            image_base64, model_name, prior_text
+        )
         markdown_text = (
             f"File: {pdf_file_name}; Page: {ix + 1}\n"
          ) + markdown_text
@@ -108,25 +162,27 @@ def pdf_to_markdown(
         wait=wait_random_exponential(min=1./5000, max=5), 
         stop=stop_after_attempt(3)
 )
-def _process_image_with_gpt4(
-        image_base64: str, 
+def _process_image_with_model(
+        image_base64: str,
+        model_name: str,
         prior_text: Union[str, None] = None
     ) -> str:
     """
-    Send a base64-encoded image to GPT-4o for processing, optionally including
-    prior text for context.
+    Send a base64-encoded image to the specified model for processing,
+    optionally including prior text for context.
 
-    Constructs a prompt for GPT-4o to interpret the image as a Markdown 
-    document, preserving the semantic meaning and information hierarchy, 
-    including tables. If prior text is provided, it is included to assist GPT-4o 
+    Constructs a prompt for the model to interpret the image as a Markdown
+    document, preserving the semantic meaning and information hierarchy,
+    including tables. If prior text is provided, it is included to assist the model
     in the interpretation.
 
     Args:
         image_base64: The base64-encoded image to be processed.
-        prior_text: Optional; previously extracted text to provide context.
+        model_name: Name of the model to use.
+        prior_text: Optional previously extracted text to provide context.
 
     Returns:
-        The Markdown version of the image content as interpreted by GPT-4o.
+        The Markdown version of the image content as interpreted by the model.
     """
     vision_base = (
         "Write a Markdown version of this page keeping as much of the semantic "
@@ -153,29 +209,22 @@ def _process_image_with_gpt4(
     )
 
     prompt = f"{vision_base}{vision_assist}" if prior_text else vision_base
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": prompt
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{image_base64}"
                     },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{image_base64}"    
-                        }
-                    }
-
-                ]
-            }
-        ],
-        max_tokens=4096
-    )
-    return response.choices[0].message.content
+                },
+            ],
+        }
+    ]
+    handler = model_registry.get(model_name)
+    return handler(client, messages)
 
 
 def _pdf_to_images_with_storage(
@@ -246,7 +295,7 @@ def _pdf_image_to_base64_str(pdf_page: Image) -> str:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Convert a PDF to a Markdown file using GPT-4o visual reasoning."
+        description="Convert a PDF to a Markdown file using OpenAI vision models."
     )
     parser.add_argument(
         'target_path', 
@@ -285,6 +334,12 @@ if __name__ == "__main__":
         default=False,
         help="If set, process each PDF file in parallel when using recursive mode."
     )
+    parser.add_argument(
+        '--model',
+        type=str,
+        default='gpt-4o',
+        help="OpenAI model to use (default: gpt-4o)."
+    )
     args = parser.parse_args()
     target_path = args.target_path
     processing_mode = args.mode
@@ -292,11 +347,22 @@ if __name__ == "__main__":
     verbose = args.verbose
     recursive = args.recursive
     parallel = args.parallel
+    model_name = args.model
 
     def process_pdf(
-            pdf_path: str, output_dir: str, processing_mode: str, verbose: bool
+            pdf_path: str,
+            output_dir: str,
+            processing_mode: str,
+            verbose: bool,
+            model: str,
         ):
-        out = pdf_to_markdown(pdf_path, output_dir, processing_mode, verbose)
+        out = pdf_to_markdown(
+            pdf_path,
+            output_dir,
+            processing_mode,
+            verbose,
+            model,
+        )
         print(f"Output file: {out}")
 
     if recursive:
@@ -315,9 +381,12 @@ if __name__ == "__main__":
                                 os.path.dirname(pdf_path)
                             futures.append(
                                 executor.submit(
-                                    process_pdf, 
-                                    pdf_path, output_dir, processing_mode, 
-                                    verbose
+                                    process_pdf,
+                                    pdf_path,
+                                    output_dir,
+                                    processing_mode,
+                                    verbose,
+                                    model_name,
                                 )
                             )
                 for future in futures:
@@ -330,11 +399,21 @@ if __name__ == "__main__":
                         output_dir = args.output_dir or \
                             os.path.dirname(pdf_path)
                         process_pdf(
-                            pdf_path, output_dir, processing_mode, verbose
+                            pdf_path,
+                            output_dir,
+                            processing_mode,
+                            verbose,
+                            model_name,
                         )
     else:
         if not os.path.isfile(target_path):
             print(f"Error: The file '{target_path}' does not exist.")
             sys.exit(1)
         output_dir = args.output_dir or os.path.dirname(target_path)
-        process_pdf(target_path, output_dir, processing_mode, verbose)
+        process_pdf(
+            target_path,
+            output_dir,
+            processing_mode,
+            verbose,
+            model_name,
+        )

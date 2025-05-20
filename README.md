@@ -1,14 +1,14 @@
 
 # PDF to Markdown Converter
 
-This tool converts PDF documents to Markdown files using GPT-4's visual reasoning capabilities. It's designed to accurately interpret and transcribe the contents of a PDF, including text and tabular data, into a Markdown format. This script is particularly useful for processing and digitizing documents for easier editing and sharing in a text-based format.
+This tool converts PDF documents to Markdown files using OpenAI's visual reasoning capabilities. It's designed to accurately interpret and transcribe the contents of a PDF, including text and tabular data, into a Markdown format. This script is particularly useful for processing and digitizing documents for easier editing and sharing in a text-based format.
 
 ## Prerequisites
 
 Before you begin, ensure you have the following installed:
 - Python 3
 - Pip (Python package installer)
-- [An OpenAI API key](https://beta.openai.com/signup/) for GPT-4 access
+- [An OpenAI API key](https://beta.openai.com/signup/) for model access
 
 ## Installation
 
@@ -37,7 +37,7 @@ Before running `pdf_to_md.py`, ensure the shebang line (first line in the file) 
 
 ## Usage
 
-Convert PDF files to Markdown format using GPT-4's visual reasoning. It supports processing a single file or multiple files within a directory, optionally in parallel. The script provides several options, including output directory specification, processing modes, verbosity for detailed output, and recursive directory processing.
+Convert PDF files to Markdown format using OpenAI's visual reasoning models. It supports processing a single file or multiple files within a directory, optionally in parallel. The script provides several options, including output directory specification, processing modes, verbosity for detailed output, model selection, and recursive directory processing.
 
 ### Basic Usage
 
@@ -52,7 +52,7 @@ To convert a PDF file:
 To utilize additional options:
 
 ```bash
-./pdf_to_md.py <path_to_pdf> -o <output_directory> -m <mode> -v -r -p
+./pdf_to_md.py <path_to_pdf> -o <output_directory> -m <mode> --model gpt-4o -v -r -p
 ```
 
 Options:
@@ -60,11 +60,12 @@ Options:
 - `<path_to_pdf>`: Path to the PDF file or directory containing PDF files.
 - `-o`, `--output_dir <output_directory>`: Destination for Markdown files. Defaults to PDF's location if unspecified.
 - `-m`, `--mode <mode>`: Sets processing mode. Choose 'v' for vision-only or 'vt' for vision-and-text (default: 'vt').
+- `--model <model>`: Selects the OpenAI model to use (default: `gpt-4o`).
 - `-v`, `--verbose`: Enables verbose output, printing the Markdown text to the console.
 - `-r`, `--recursive`: Processes all PDF files within the target directory recursively.
 - `-p`, `--parallel`: Processes files in parallel during recursive operation.
 
-Ensure to replace `<path_to_pdf>` and `<output_directory>` with your specific paths. The `-m` option allows for tailored processing, while `-v`, `-r`, and `-p` flags offer control over output verbosity, directory traversal, and execution strategy, respectively.
+Ensure to replace `<path_to_pdf>` and `<output_directory>` with your specific paths. The `-m` option allows for tailored processing, and `--model` chooses the model variant. The `-v`, `-r`, and `-p` flags offer control over output verbosity, directory traversal, and execution strategy, respectively.
 
 
 ## License
