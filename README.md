@@ -30,6 +30,70 @@ If you don't have `poppler` installed, see [Additional Dependencies](#additional
 Set your OpenAI API key in your environment or `.env` file as `OPENAI_API_KEY`.
 
 
+## Virtual Environment Setup (Recommended)
+
+It's recommended to use a Conda environment to manage dependencies for this project.
+
+### Creating the Conda Environment
+
+Create a new Conda environment named `pdf_to_md`:
+
+```bash
+conda create -n pdf_to_md python=3.9
+```
+
+### Activating the Environment
+
+Before running the script or installing dependencies, activate the environment:
+
+```bash
+conda activate pdf_to_md
+```
+
+Once activated, install the required packages:
+
+```bash
+pip install -r requirements.txt
+```
+
+### Deactivating the Environment
+
+When you're done working with the script, you can deactivate the environment:
+
+```bash
+conda deactivate
+```
+
+### Checking Active Environment
+
+To verify which environment is currently active:
+
+```bash
+conda env list
+```
+
+The active environment will be marked with an asterisk (*).
+
+### Configuring Cursor/VS Code
+
+To ensure Cursor uses the correct Conda environment for linting and
+IntelliSense:
+
+1. **Automatic (recommended):** A `.vscode/settings.json` file is included
+   that points to the `pdf_to_md` Conda environment.
+
+2. **Manual selection:** 
+   - Press `Cmd+Shift+P` (or `Ctrl+Shift+P` on Windows/Linux)
+   - Type "Python: Select Interpreter"
+   - Choose `/opt/homebrew/anaconda3/envs/pdf_to_md/bin/python`
+
+3. **Verify:** Check the bottom-right corner of Cursor to confirm it shows
+   "3.x.x ('pdf_to_md')"
+
+If you installed Anaconda in a different location, update the path in
+`.vscode/settings.json` accordingly.
+
+
 ## Script Configuration
 
 Before running `pdf_to_md.py`, ensure the shebang line (first line in the file) points to your Python interpreter. If needed, replace `#!/opt/homebrew/anaconda3/envs/pdf_to_md/bin/python` with the path to your Python executable, which you can find with `which python` or `which python3` in your terminal.
