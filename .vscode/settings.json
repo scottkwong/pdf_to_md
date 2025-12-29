@@ -1,0 +1,6 @@
+{
+    "python.defaultInterpreterPath": "/opt/homebrew/anaconda3/envs/pdf_to_md/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "python.terminal.activateEnvInCurrentTerminal": true
+}
+
