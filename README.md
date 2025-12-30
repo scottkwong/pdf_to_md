@@ -168,20 +168,19 @@ To convert a PDF file (defaults to OpenAI GPT-5.2 via OpenRouter):
 To utilize additional options:
 
 ```bash
-./pdf_to_md.py <path_to_pdf> -o <output_directory> -m <mode> --vision-model <model> -v -r -p
+./pdf_to_md.py <path_to_pdf> -o <output_directory> -m <mode> --model <model> --provider <provider> --prefer-direct -q -r -p
 ```
 
 **Options:**
 
 - `<path_to_pdf>`: Path to the PDF file or directory containing PDF files.
+- `--list-models`: List all available models and show the default, then exit.
 - `-o`, `--output_dir <output_directory>`: Destination for Markdown files. Defaults to PDF's location if unspecified.
 - `-m`, `--mode <mode>`: Sets processing mode. Choose 'v' for vision-only or 'vt' for vision-and-text (default: 'vt').
-- `--vision-model <model>`: Model identifier from `models.json` for vision processing (default: `gpt-5.2`).
-- `--text-model <model>`: Model identifier for text processing (defaults to vision-model).
+- `--model <model>`: Model identifier from `models.json` to use for both vision and text processing (default: `gpt-5.2`).
 - `--provider <provider>`: Force specific provider: `openrouter`, `openai`, `anthropic`, or `google` (optional).
 - `--prefer-direct`: Skip OpenRouter and use direct APIs only.
-- `-v`, `--verbose`: Enables verbose output, printing the Markdown text to the console.
-- `-q`, `--quiet`: Disables verbose output (opposite of `-v`).
+- `-q`, `--quiet`: Disables verbose output. By default, the script prints markdown to console.
 - `-r`, `--recursive`: Processes all PDF files within the target directory recursively.
 - `-p`, `--parallel`: Processes files in parallel during recursive operation.
 
@@ -197,17 +196,29 @@ To utilize additional options:
 **Examples:**
 
 ```bash
+# List all available models
+./pdf_to_md.py --list-models
+
 # Use default model (GPT-5.2 via OpenRouter)
 ./pdf_to_md.py document.pdf
 
 # Use Gemini 3 Pro
-./pdf_to_md.py document.pdf --vision-model gemini-3-pro
+./pdf_to_md.py document.pdf --model gemini-3-pro
 
 # Use Claude Sonnet with direct API (skip OpenRouter)
-./pdf_to_md.py document.pdf --vision-model claude-sonnet-4.5 --prefer-direct
+./pdf_to_md.py document.pdf --model claude-sonnet-4.5 --prefer-direct
 
-# Process directory recursively with verbose output
-./pdf_to_md.py ./documents -r -v
+# Use specific provider
+./pdf_to_md.py document.pdf --model claude-sonnet-4.5 --provider anthropic
+
+# Process directory recursively (verbose by default)
+./pdf_to_md.py ./documents -r
+
+# Process directory quietly (no console output)
+./pdf_to_md.py ./documents -r -q
+
+# Process directory in parallel
+./pdf_to_md.py ./documents -r -p
 ```
 
 ### Provider Selection
