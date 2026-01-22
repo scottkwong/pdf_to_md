@@ -7,122 +7,21 @@ file in the same directory with the same name as the PDF file. Supports
 multiple LLM providers via OpenRouter and direct APIs.
 """
 import argparse
-import base64
-import io
 import os
 import sys
 
 from dotenv import load_dotenv
-from pdf2image import convert_from_path
-from PIL import Image
-from PyPDF2 import PdfReader
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_random_exponential,
-)
-from tqdm import tqdm
-from typing import List, Optional, Tuple, Union, TYPE_CHECKING
+from typing import Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from llm_providers import BaseProvider
+    from extractors import BaseExtractor
 
 # Load environment variables
 load_dotenv()
 
 # Import llm_providers after load_dotenv (will be imported later if needed)
 # This allows --list-models to work without all dependencies
-
-
-def pdf_to_markdown(
-        pdf_path: str,
-        output_dir: str,
-        mode: str = "vt",
-        verbose: bool = True,
-        vision_model: str = "gpt-5.2",
-        text_model: Optional[str] = None,
-        prefer_openrouter: bool = True,
-    ) -> str:
-    """
-    Main function to convert a PDF to Markdown using LLM vision models.
-
-    This function takes a path to a PDF file, an output directory, a mode
-    indicating whether to use 'vision-only' (v) or 'vision-and-text' (vt)
-    processing, and a verbose flag. It converts the PDF to images, processes
-    each image with the specified vision model to generate markdown text, and
-    writes the markdown text to a file with the same name as the PDF file but
-    with a .md extension, located in the output directory. If verbose is True,
-    it also prints the markdown text to the screen.
-
-    Args:
-        pdf_path: The path to the input PDF file.
-        output_dir: The directory where the output markdown file will be saved.
-        mode: The processing mode ('v' for vision-only, 'vt' for
-            vision-and-text).
-        verbose: If True, print the markdown text to the screen.
-        vision_model: Model identifier from models.json for vision processing.
-        text_model: Model identifier for text processing (defaults to
-            vision_model).
-        prefer_openrouter: If True, prefer OpenRouter when available.
-
-    Returns:
-        output_file_path
-    """
-    # Setup constants and validation
-    output_file_name = os.path.basename(pdf_path).rsplit('.', 1)[0] + '.md'
-    output_file_path = os.path.join(output_dir, output_file_name)
-    pdf_file_name = os.path.basename(pdf_path)
-
-    # Validate mode
-    valid_modes = ['v', 'vt']
-    if mode not in valid_modes:
-        raise ValueError(
-            f"Invalid mode '{mode}'. Valid modes are {valid_modes}."
-        )
-
-    # Initialize vision provider
-    vision_provider, vision_model_id = _initialize_provider(
-        vision_model, prefer_openrouter
-    )
-
-    # Get images
-    images = _pdf_to_images_with_storage(pdf_path, output_dir)
-
-    # Get prior texts
-    if mode == 'v':
-        prior_texts = [None] * len(images)
-    elif mode == 'vt':
-        prior_texts = _get_prior_text(pdf_path)
-
-    # Check that lengths match
-    if len(prior_texts) != len(images):
-        raise ValueError(
-            f"The number of prior texts ({len(prior_texts)}) does not match "
-            f"the number of images ({len(images)})."
-        )
-
-    # Build the markdown
-    markdown_content = []
-    for ix, (image, prior_text) in enumerate(tqdm(zip(images, prior_texts))):
-        image_base64 = _pdf_image_to_base64_str(image)
-        markdown_text = _process_image_with_provider(
-            vision_provider,
-            vision_model_id,
-            image_base64,
-            prior_text,
-        )
-        markdown_text = (
-            f"File: {pdf_file_name}; Page: {ix + 1}\n"
-        ) + markdown_text
-        markdown_content.append(markdown_text)
-        if verbose:
-            print(markdown_text)
-
-    # Write results
-    with open(output_file_path, 'w') as file:
-        file.write('\n'.join(markdown_content))
-
-    return output_file_path
 
 
 def _initialize_provider(
@@ -139,7 +38,7 @@ def _initialize_provider(
         Tuple of (provider_instance, model_id).
     """
     from llm_providers import create_provider
-    
+
     try:
         provider, model_id = create_provider(model, prefer_openrouter)
         return provider, model_id
@@ -148,132 +47,77 @@ def _initialize_provider(
         sys.exit(1)
 
 
-@retry(
-    wait=wait_random_exponential(min=1.0 / 5000, max=5),
-    stop=stop_after_attempt(3),
-)
-def _process_image_with_provider(
-    provider: "BaseProvider",
-    model_id: str,
-    image_base64: str,
-    prior_text: Optional[str] = None,
+def create_extractor(
+    extractor_type: str,
+    model: str = "gpt-5.2",
+    mode: str = "vt",
+    prefer_openrouter: bool = True,
+    llamaparse_tier: str = "agentic",
+    language: str = "en",
+    verbose: bool = False,
+) -> "BaseExtractor":
+    """
+    Create appropriate extractor based on type.
+
+    Args:
+        extractor_type: Type of extractor ('vision' or 'llamaparse').
+        model: Model identifier for vision extractor.
+        mode: Processing mode for vision extractor ('v' or 'vt').
+        prefer_openrouter: Whether to prefer OpenRouter for vision extractor.
+        llamaparse_tier: Processing tier for LlamaParse extractor.
+        language: Document language for LlamaParse extractor.
+        verbose: Enable verbose logging.
+
+    Returns:
+        Configured BaseExtractor instance.
+    """
+    if extractor_type == "llamaparse":
+        from llamaparse_extractor import LlamaParseExtractor
+        return LlamaParseExtractor(
+            tier=llamaparse_tier,
+            language=language,
+            verbose=verbose,
+        )
+    else:
+        # Default: vision-based extraction
+        from extractors import VisionExtractor
+        provider, model_id = _initialize_provider(model, prefer_openrouter)
+        return VisionExtractor(
+            provider=provider,
+            model_id=model_id,
+            mode=mode,
+        )
+
+
+def pdf_to_markdown_with_extractor(
+    pdf_path: str,
+    output_dir: str,
+    extractor: "BaseExtractor",
+    verbose: bool = True,
 ) -> str:
     """
-    Send a base64-encoded image to LLM provider for processing.
-
-    Constructs a prompt for the model to interpret the image as a Markdown
-    document, preserving the semantic meaning and information hierarchy,
-    including tables. If prior text is provided, it is included to assist the
-    model in the interpretation.
+    Convert PDF to Markdown using the specified extractor.
 
     Args:
-        provider: Provider instance to use for processing.
-        model_id: Model identifier for the provider.
-        image_base64: The base64-encoded image to be processed.
-        prior_text: Optional; previously extracted text to provide context.
+        pdf_path: Path to the PDF file.
+        output_dir: Directory for output file.
+        extractor: Configured extractor instance.
+        verbose: Print progress to console.
 
     Returns:
-        The Markdown version of the image content as interpreted by the model.
+        Path to the output markdown file.
     """
-    vision_base = (
-        "Write a Markdown version of this page keeping as much of the "
-        "semantic meaning from information hierarchy as possible. For "
-        "tabular-like data (including chart data), make easy to read tables "
-        "as they'd be presented by a financial analyst.\n\n"
-        "DO NOT include any 'meta description' of the markdown itself, like:"
-        "\n- 'In the tables, the data should reflect the values provided in "
-        "the original image.'"
-        "\n- 'This markdown version maintains the hierarchy and clarity of the "
-        "original page using headers and tables to present the financial data "
-        "in an analyst-friendly format.'"
-        "\n- 'In this Markdown version, the hierarchy of information is "
-        "preserved with headers (`#`, `##`, `###`) and tables are created "
-        "for easier readability as per the data presented.'\n"
-        "Do NOT start each page with ```markdown or end with ```."
-    )
+    output_file_name = os.path.basename(pdf_path).rsplit('.', 1)[0] + '.md'
+    output_file_path = os.path.join(output_dir, output_file_name)
 
-    vision_assist = (
-        "\n\nYour vision isn't great, so I've provided previously extracted "
-        "text to help in <prior_text> tags. That text isn't perfect either so "
-        "use a balanced approach to create the full Markdown output.\n"
-        "\n<prior_text>\n{prior_text}\n</prior_text>\n"
-    )
+    # Extract using the configured extractor
+    result = extractor.extract(pdf_path, output_dir, verbose)
 
-    prompt = f"{vision_base}{vision_assist}" if prior_text else vision_base
+    # Write results
+    with open(output_file_path, 'w') as file:
+        file.write(result.markdown)
 
-    return provider.process_vision(
-        image_base64=image_base64,
-        prompt=prompt,
-        prior_text=prior_text,
-        model=model_id,
-        max_tokens=4096,
-    )
-
-
-def _pdf_to_images_with_storage(
-        pdf_path: str, 
-        output_dir: str
-    ) -> List[Image.Image]:
-    """
-    Load images from the output directory if they exist, otherwise convert the 
-    PDF to images and save them to the specified output directory.
-
-    Args:
-        pdf_path: The path to the input PDF file.
-        output_dir: The directory where the output images will be saved.
-
-    Returns:
-        A list of PIL Image objects.
-    """
-    base_name = os.path.basename(pdf_path).rsplit('.', 1)[0]
-    image_folder = os.path.join(output_dir, base_name + '_images')
-    if not os.path.exists(image_folder):
-        os.makedirs(image_folder)
-        images = convert_from_path(pdf_path)
-        for i, image in enumerate(images):
-            image.save(os.path.join(image_folder, f'{base_name}_image_{i}.png'))
-    else:
-        image_files = sorted(
-            [f for f in os.listdir(image_folder) if f.endswith('.png')],
-            key=lambda x: int(x.rsplit('_', 1)[-1].split('.')[0])
-        )
-        images = [
-            Image.open(os.path.join(image_folder, f)) for f in image_files
-        ]
-    return images
-
-
-def _get_prior_text(pdf_path: str) -> List[str]:
-    """
-    Extracts simple text from each page of the PDF using PyPDF2.
-
-    Args:
-        pdf_path (str): The path to the input PDF file.
-
-    Returns:
-        List[str]: A list of strings where each string represents the extracted 
-            text from a single page of the PDF.
-    """
-    with open(pdf_path, 'rb') as file:
-        reader = PdfReader(file)
-        text_list = [page.extract_text() for page in reader.pages]
-    return text_list
-
-
-def _pdf_image_to_base64_str(pdf_page: Image) -> str:
-    """
-    Convert a PDF page to a base64 encoded JPEG image.
-
-    Args:
-        pdf_page (Image): A PIL Image object representing a PDF page.
-
-    Returns:
-        str: A base64 encoded string of the JPEG image.
-    """
-    image_buffer = io.BytesIO()
-    pdf_page.save(image_buffer, format='JPEG')
-    byte_data = image_buffer.getvalue()
-    return base64.b64encode(byte_data).decode('utf-8')
+    return output_file_path
 
 
 def list_available_models() -> None:
@@ -338,7 +182,7 @@ def list_available_models() -> None:
 def print_cli_configuration(args: argparse.Namespace, model: str) -> None:
     """
     Print CLI configuration to the console.
-    
+
     Args:
         args: Parsed command-line arguments.
         model: Model identifier being used.
@@ -348,13 +192,18 @@ def print_cli_configuration(args: argparse.Namespace, model: str) -> None:
     print("=" * 70)
     print(f"  Target path:        {args.target_path}")
     print(f"  Output directory:   {args.output_dir or '(default: same as input)'}")
-    print(f"  Mode:               {args.mode}")
+    print(f"  Extractor:          {args.extractor}")
+    if args.extractor == "llamaparse":
+        print(f"  LlamaParse tier:    {args.llamaparse_tier}")
+        print(f"  Language:           {args.language}")
+    else:
+        print(f"  Mode:               {args.mode}")
+        print(f"  Model:              {model}")
+        print(f"  Provider override:  {args.provider or '(none - auto-detect)'}")
+        print(f"  Prefer OpenRouter:  {not args.prefer_direct}")
     print(f"  Verbose:            {args.verbose}")
     print(f"  Recursive:          {args.recursive}")
     print(f"  Parallel:           {args.parallel}")
-    print(f"  Model:              {model}")
-    print(f"  Provider override:  {args.provider or '(none - auto-detect)'}")
-    print(f"  Prefer OpenRouter:  {not args.prefer_direct}")
     print()
 
 
@@ -411,30 +260,23 @@ def print_model_resolution(
 def process_single_pdf(
     pdf_path: str,
     output_dir: str,
-    processing_mode: str,
+    extractor: "BaseExtractor",
     verbose: bool,
-    model: str,
-    prefer_openrouter: bool,
 ) -> None:
     """
     Process a single PDF file.
-    
+
     Args:
         pdf_path: Path to the PDF file.
         output_dir: Output directory for the markdown file.
-        processing_mode: Processing mode ('v' or 'vt').
+        extractor: Configured extractor to use.
         verbose: Whether to print markdown to console.
-        model: Model identifier to use.
-        prefer_openrouter: Whether to prefer OpenRouter.
     """
-    output_file = pdf_to_markdown(
+    output_file = pdf_to_markdown_with_extractor(
         pdf_path,
         output_dir,
-        processing_mode,
+        extractor,
         verbose,
-        model,
-        None,  # text_model - same as vision_model
-        prefer_openrouter,
     )
     print(f"Output file: {output_file}")
 
@@ -442,21 +284,17 @@ def process_single_pdf(
 def process_directory_sequential(
     target_path: str,
     output_dir: Optional[str],
-    processing_mode: str,
+    extractor: "BaseExtractor",
     verbose: bool,
-    model: str,
-    prefer_openrouter: bool,
 ) -> None:
     """
     Process all PDF files in a directory sequentially.
-    
+
     Args:
         target_path: Path to the directory.
         output_dir: Base output directory (None to use same as each PDF).
-        processing_mode: Processing mode ('v' or 'vt').
+        extractor: Configured extractor to use.
         verbose: Whether to print markdown to console.
-        model: Model identifier to use.
-        prefer_openrouter: Whether to prefer OpenRouter.
     """
     for root, dirs, files in os.walk(target_path):
         for file in files:
@@ -466,34 +304,28 @@ def process_directory_sequential(
                 process_single_pdf(
                     pdf_path,
                     pdf_output_dir,
-                    processing_mode,
+                    extractor,
                     verbose,
-                    model,
-                    prefer_openrouter,
                 )
 
 
 def process_directory_parallel(
     target_path: str,
     output_dir: Optional[str],
-    processing_mode: str,
+    extractor: "BaseExtractor",
     verbose: bool,
-    model: str,
-    prefer_openrouter: bool,
 ) -> None:
     """
     Process all PDF files in a directory in parallel.
-    
+
     Args:
         target_path: Path to the directory.
         output_dir: Base output directory (None to use same as each PDF).
-        processing_mode: Processing mode ('v' or 'vt').
+        extractor: Configured extractor to use.
         verbose: Whether to print markdown to console.
-        model: Model identifier to use.
-        prefer_openrouter: Whether to prefer OpenRouter.
     """
     from concurrent.futures import ThreadPoolExecutor
-    
+
     with ThreadPoolExecutor() as executor:
         futures = []
         for root, dirs, files in os.walk(target_path):
@@ -506,10 +338,8 @@ def process_directory_parallel(
                             process_single_pdf,
                             pdf_path,
                             pdf_output_dir,
-                            processing_mode,
+                            extractor,
                             verbose,
-                            model,
-                            prefer_openrouter,
                         )
                     )
         for future in futures:
@@ -623,6 +453,28 @@ if __name__ == "__main__":
         help="If set, process each PDF file in parallel when using recursive "
         "mode.",
     )
+    parser.add_argument(
+        "--extractor",
+        type=str,
+        choices=["vision", "llamaparse"],
+        default="vision",
+        help="Extraction method: 'vision' (LLM-based, default) or 'llamaparse' "
+        "(LlamaCloud API).",
+    )
+    parser.add_argument(
+        "--llamaparse-tier",
+        type=str,
+        choices=["fast", "cost_effective", "agentic", "agentic_plus"],
+        default="agentic",
+        help="LlamaParse processing tier (only used with --extractor llamaparse). "
+        "Options: fast, cost_effective, agentic (default), agentic_plus.",
+    )
+    parser.add_argument(
+        "--language",
+        type=str,
+        default="en",
+        help="Document language code for LlamaParse (default: 'en').",
+    )
     args = parser.parse_args()
     
     # Handle --list-models flag (before importing llm_providers)
@@ -633,15 +485,46 @@ if __name__ == "__main__":
     # Require target_path if not listing models
     if not args.target_path:
         parser.error("target_path is required unless using --list-models")
-    
+
     # Extract configuration from args
     model = args.model
     prefer_openrouter = not args.prefer_direct
-    
-    # Print configuration and resolve model
+
+    # Print configuration
     print_cli_configuration(args, model)
-    print_model_resolution(model, prefer_openrouter)
-    
+
+    # Create extractor and handle model resolution
+    extractor = None
+    if args.extractor == "llamaparse":
+        try:
+            extractor = create_extractor(
+                extractor_type="llamaparse",
+                llamaparse_tier=args.llamaparse_tier,
+                language=args.language,
+                verbose=args.verbose,
+            )
+            print("=" * 70)
+            print("LlamaParse Configuration:")
+            print("=" * 70)
+            print(f"  Extractor:          {extractor.name}")
+            print(f"  Tier:               {args.llamaparse_tier}")
+            print(f"  Language:           {args.language}")
+            print("=" * 70)
+            print()
+        except ValueError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+    else:
+        # Vision-based extraction - resolve model
+        print_model_resolution(model, prefer_openrouter)
+        extractor = create_extractor(
+            extractor_type="vision",
+            model=model,
+            mode=args.mode,
+            prefer_openrouter=prefer_openrouter,
+            verbose=args.verbose,
+        )
+
     # Process PDF(s) based on mode
     if args.recursive:
         validate_directory_path(args.target_path)
@@ -649,19 +532,15 @@ if __name__ == "__main__":
             process_directory_parallel(
                 args.target_path,
                 args.output_dir,
-                args.mode,
+                extractor,
                 args.verbose,
-                model,
-                prefer_openrouter,
             )
         else:
             process_directory_sequential(
                 args.target_path,
                 args.output_dir,
-                args.mode,
+                extractor,
                 args.verbose,
-                model,
-                prefer_openrouter,
             )
     else:
         validate_file_path(args.target_path)
@@ -669,8 +548,6 @@ if __name__ == "__main__":
         process_single_pdf(
             args.target_path,
             output_dir,
-            args.mode,
+            extractor,
             args.verbose,
-            model,
-            prefer_openrouter,
         )
