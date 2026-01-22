@@ -42,6 +42,7 @@ OPENROUTER_API_KEY=your_openrouter_key_here
 OPENAI_API_KEY=your_openai_key_here
 ANTHROPIC_API_KEY=your_anthropic_key_here
 GEMINI_API_KEY=your_gemini_key_here
+LLAMA_CLOUD_API_KEY=your_llamacloud_key_here
 ```
 
 If you have the keys in your shell environment (e.g., in `.bash_profile`
@@ -63,6 +64,7 @@ export OPENROUTER_API_KEY="your_openrouter_key_here"
 export OPENAI_API_KEY="your_openai_key_here"
 export ANTHROPIC_API_KEY="your_anthropic_key_here"
 export GEMINI_API_KEY="your_gemini_key_here"
+export LLAMA_CLOUD_API_KEY="your_llamacloud_key_here"
 ```
 
 **Supported API Keys:**
@@ -70,10 +72,11 @@ export GEMINI_API_KEY="your_gemini_key_here"
 - `OPENAI_API_KEY` (for direct OpenAI access)
 - `ANTHROPIC_API_KEY` (for direct Anthropic access)
 - `GEMINI_API_KEY` or `GOOGLE_API_KEY` (for direct Google access)
+- `LLAMA_CLOUD_API_KEY` (for LlamaParse extraction - get from https://cloud.llamaindex.ai)
 
-**Note:** You only need at least one API key to use the tool. OpenRouter 
-is recommended as it provides access to all supported models through a 
-single API.
+**Note:** You only need at least one API key to use the tool. OpenRouter
+is recommended as it provides access to all supported models through a
+single API. For LlamaParse extraction, you need a separate `LLAMA_CLOUD_API_KEY`.
 
 The tool defaults to using OpenRouter when available, with automatic 
 fallback to direct provider APIs. If your requested model is unavailable, 
@@ -183,6 +186,9 @@ To utilize additional options:
 - `-q`, `--quiet`: Disables verbose output. By default, the script prints markdown to console.
 - `-r`, `--recursive`: Processes all PDF files within the target directory recursively.
 - `-p`, `--parallel`: Processes files in parallel during recursive operation.
+- `--extractor <extractor>`: Extraction method: `vision` (default, LLM-based) or `llamaparse` (LlamaCloud API).
+- `--llamaparse-tier <tier>`: LlamaParse processing tier (only with `--extractor llamaparse`): `fast`, `cost_effective`, `agentic` (default), `agentic_plus`.
+- `--language <lang>`: Document language code for LlamaParse (default: `en`).
 
 **Available Models** (defined in `models.json`):
 - `gpt-5.2` - OpenAI GPT-5.2 (default)
@@ -219,7 +225,37 @@ To utilize additional options:
 
 # Process directory in parallel
 ./pdf_to_md.py ./documents -r -p
+
+# Use LlamaParse extraction (requires LLAMA_CLOUD_API_KEY)
+./pdf_to_md.py document.pdf --extractor llamaparse
+
+# Use LlamaParse with maximum fidelity tier
+./pdf_to_md.py document.pdf --extractor llamaparse --llamaparse-tier agentic_plus
+
+# Use LlamaParse for non-English documents
+./pdf_to_md.py document.pdf --extractor llamaparse --language de
 ```
+
+### Extraction Methods
+
+The tool supports two extraction methods:
+
+**Vision-based extraction (default):** Converts PDF pages to images and uses
+vision-capable LLMs (GPT-4, Claude, Gemini) to interpret each page. Best for
+documents where visual layout is important.
+
+**LlamaParse extraction:** Uses LlamaIndex's LlamaParse API for document-level
+extraction. Optimized for structured documents like financial reports and
+scientific papers. Requires `LLAMA_CLOUD_API_KEY`.
+
+LlamaParse tiers:
+- `fast` - Speed priority, best for simple documents
+- `cost_effective` - Budget-friendly for standard documents
+- `agentic` - Balanced accuracy and speed (default)
+- `agentic_plus` - Maximum fidelity for complex layouts
+
+LlamaParse pricing: Free tier includes 1,000 pages/day. Paid plans offer
+7,000 pages/week + $0.003 per additional page.
 
 ### Provider Selection
 
