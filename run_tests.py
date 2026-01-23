@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from llm_providers import get_available_providers
 from tests.test_pdf_processing import run_all_tests as run_vision_tests
 from tests.test_text_processing import run_all_tests as run_text_tests
+from tests.test_llamaparse import run_all_tests as run_llamaparse_tests
 
 
 def main():
@@ -66,15 +67,22 @@ def main():
     print("=" * 60)
     vision_success = run_vision_tests()
 
+    # Run LlamaParse tests
+    print("\n" + "=" * 60)
+    print("LLAMAPARSE EXTRACTION TESTS")
+    print("=" * 60)
+    llamaparse_success = run_llamaparse_tests()
+
     # Final summary
     print("\n" + "=" * 60)
     print("FINAL SUMMARY")
     print("=" * 60)
     print(f"Text Processing: {'PASSED' if text_success else 'FAILED'}")
     print(f"Vision Processing: {'PASSED' if vision_success else 'FAILED'}")
+    print(f"LlamaParse Extraction: {'PASSED' if llamaparse_success else 'FAILED'}")
     print()
 
-    if text_success and vision_success:
+    if text_success and vision_success and llamaparse_success:
         print("✓ All tests passed!")
         sys.exit(0)
     else:
