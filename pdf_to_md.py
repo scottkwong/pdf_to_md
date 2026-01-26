@@ -502,11 +502,13 @@ if __name__ == "__main__":
 
     # Configure logging based on debug flag
     if args.debug:
+        # Only enable debug for our modules, suppress noisy HTTP client logs
         logging.basicConfig(
-            level=logging.DEBUG,
+            level=logging.WARNING,
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
             datefmt="%H:%M:%S",
         )
+        logging.getLogger("extractors").setLevel(logging.DEBUG)
     
     # Handle --list-models flag (before importing llm_providers)
     if args.list_models:
