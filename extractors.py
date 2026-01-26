@@ -176,9 +176,11 @@ class VisionExtractor(BaseExtractor):
         # Process pages in parallel
         results: dict[int, str] = {}
         completion_order: list[int] = []
+        failed_pages: list[tuple[int, str]] = []  # (page_index, error_message)
+        total_pages = len(images)
 
         logger.debug(
-            f"Starting parallel extraction: {len(images)} pages, "
+            f"Starting parallel extraction: {total_pages} pages, "
             f"max_workers={self.max_parallel_pages}"
         )
 
@@ -196,23 +198,71 @@ class VisionExtractor(BaseExtractor):
                 )
 
             for future in iterator:
-                page_index, content = future.result()
-                results[page_index] = content
-                completion_order.append(page_index)
-                logger.debug(
-                    f"Collected result for page {page_index + 1} "
-                    f"(completion #{len(completion_order)})"
-                )
+                page_index = futures[future]
+                try:
+                    result_index, content = future.result()
+                    results[result_index] = content
+                    completion_order.append(result_index)
+                    logger.debug(
+                        f"Collected result for page {result_index + 1} "
+                        f"(completion #{len(completion_order)})"
+                    )
+                except Exception as e:
+                    failed_pages.append((page_index, str(e)))
+                    logger.error(
+                        f"FAILED: Page {page_index + 1} failed to process: {e}"
+                    )
+
+        # Check for failed pages
+        if failed_pages:
+            failed_nums = [p + 1 for p, _ in failed_pages]
+            logger.error(
+                f"PAGE PROCESSING ERRORS: {len(failed_pages)} of {total_pages} "
+                f"pages failed to process. Failed pages: {failed_nums}"
+            )
+            for page_idx, error_msg in failed_pages:
+                logger.error(f"  Page {page_idx + 1}: {error_msg}")
+
+        # Check for missing pages
+        expected_pages = set(range(total_pages))
+        received_pages = set(results.keys())
+        missing_pages = expected_pages - received_pages
+        if missing_pages:
+            missing_nums = sorted([p + 1 for p in missing_pages])
+            logger.error(
+                f"MISSING PAGES: Expected {total_pages} pages but only "
+                f"received {len(results)}. Missing pages: {missing_nums}"
+            )
 
         # Reconstruct in page order
         logger.debug(f"Completion order (0-indexed): {completion_order}")
-        assembly_order = list(range(len(results)))
+        assembly_order = list(range(total_pages))
         logger.debug(f"Assembly order (0-indexed): {assembly_order}")
-        markdown_content = [results[i] for i in assembly_order]
-        logger.debug(
-            f"Assembled {len(markdown_content)} pages in order: "
-            f"{[i + 1 for i in assembly_order]}"
-        )
+
+        # Build markdown, inserting placeholder for missing pages
+        markdown_content = []
+        for i in assembly_order:
+            if i in results:
+                markdown_content.append(results[i])
+            else:
+                placeholder = (
+                    f"File: {pdf_file_name}; Page: {i + 1}\n"
+                    f"[ERROR: Page {i + 1} failed to process]\n"
+                )
+                markdown_content.append(placeholder)
+
+        # Verify assembly order matches expected sequence
+        assembled_indices = [i for i in assembly_order if i in results]
+        if assembled_indices != sorted(assembled_indices):
+            logger.error(
+                f"PAGE ORDER ERROR: Pages were not assembled in sequential "
+                f"order. Assembled indices: {assembled_indices}"
+            )
+        else:
+            logger.debug(
+                f"Assembled {len(markdown_content)} pages in order: "
+                f"{[i + 1 for i in assembly_order]}"
+            )
 
         return ExtractionResult(
             markdown="\n".join(markdown_content),

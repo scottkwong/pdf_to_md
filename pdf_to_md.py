@@ -500,15 +500,18 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # Configure logging based on debug flag
+    # Configure logging - always show errors, debug only with -d flag
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    # Set extractors logger to show errors by default, debug with -d
+    extractors_logger = logging.getLogger("extractors")
     if args.debug:
-        # Only enable debug for our modules, suppress noisy HTTP client logs
-        logging.basicConfig(
-            level=logging.WARNING,
-            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-            datefmt="%H:%M:%S",
-        )
-        logging.getLogger("extractors").setLevel(logging.DEBUG)
+        extractors_logger.setLevel(logging.DEBUG)
+    else:
+        extractors_logger.setLevel(logging.ERROR)
     
     # Handle --list-models flag (before importing llm_providers)
     if args.list_models:
