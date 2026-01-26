@@ -184,8 +184,10 @@ To utilize additional options:
 - `--provider <provider>`: Force specific provider: `openrouter`, `openai`, `anthropic`, or `google` (optional).
 - `--prefer-direct`: Skip OpenRouter and use direct APIs only.
 - `-q`, `--quiet`: Disables verbose output. By default, the script prints markdown to console.
-- `-r`, `--recursive`: Processes all PDF files within the target directory recursively.
-- `-p`, `--parallel`: Processes files in parallel during recursive operation.
+- `-r`, `--recursive`: Processes all PDF files within the target directory recursively. Files are processed in parallel by default.
+- `-s`, `--single`: Process files sequentially instead of in parallel when using `-r`.
+- `-p`, `--parallel [N]`: Max parallel pages to process with VisionExtractor (default: 10). Controls how many pages are processed concurrently.
+- `-d`, `--debug`: Enable debug logging for page processing order. Useful for diagnosing page ordering issues.
 - `--extractor <extractor>`: Extraction method: `vision` (default, LLM-based) or `llamaparse` (LlamaCloud API).
 - `--llamaparse-tier <tier>`: LlamaParse processing tier (only with `--extractor llamaparse`): `fast`, `cost_effective`, `agentic` (default), `agentic_plus`.
 - `--language <lang>`: Document language code for LlamaParse (default: `en`).
@@ -217,14 +219,20 @@ To utilize additional options:
 # Use specific provider
 ./pdf_to_md.py document.pdf --model claude-sonnet-4.5 --provider anthropic
 
-# Process directory recursively (verbose by default)
+# Process directory recursively (files processed in parallel by default)
 ./pdf_to_md.py ./documents -r
+
+# Process directory sequentially (one file at a time)
+./pdf_to_md.py ./documents -r -s
 
 # Process directory quietly (no console output)
 ./pdf_to_md.py ./documents -r -q
 
-# Process directory in parallel
-./pdf_to_md.py ./documents -r -p
+# Limit parallel page processing to 5 concurrent pages
+./pdf_to_md.py document.pdf -p 5
+
+# Enable debug logging to see page processing order
+./pdf_to_md.py document.pdf -d
 
 # Use LlamaParse extraction (requires LLAMA_CLOUD_API_KEY)
 ./pdf_to_md.py document.pdf --extractor llamaparse
