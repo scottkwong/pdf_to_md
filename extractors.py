@@ -123,61 +123,92 @@ class VisionExtractor(BaseExtractor):
         Returns:
             ExtractionResult with markdown content.
         """
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
         pdf_file_name = os.path.basename(pdf_path)
 
-        # Get images
+        # Load page images and prior text
+        images, prior_texts = self._load_page_data(pdf_path, output_dir)
+
+        # Process all pages in parallel
+        results, failed_pages = self._process_pages_parallel(
+            images, prior_texts, pdf_file_name, verbose
+        )
+
+        # Log any errors
+        self._log_processing_errors(failed_pages, len(images), results)
+
+        # Assemble final markdown in page order
+        markdown_content = self._assemble_markdown(
+            results, len(images), pdf_file_name
+        )
+
+        return ExtractionResult(
+            markdown="\n".join(markdown_content),
+            page_count=len(images),
+            metadata={
+                "extractor": "vision",
+                "model": self.model_id,
+                "mode": self.mode,
+                "max_parallel_pages": self.max_parallel_pages,
+            },
+        )
+
+    def _load_page_data(
+        self, pdf_path: str, output_dir: str
+    ) -> tuple[List[Image.Image], List[Optional[str]]]:
+        """
+        Load page images and extract prior text from PDF.
+
+        Args:
+            pdf_path: Path to the PDF file.
+            output_dir: Directory for cached images.
+
+        Returns:
+            Tuple of (images, prior_texts) lists.
+
+        Raises:
+            ValueError: If image and text counts don't match.
+        """
         images = self._pdf_to_images_with_storage(pdf_path, output_dir)
 
-        # Get prior texts
         if self.mode == "v":
-            prior_texts = [None] * len(images)
+            prior_texts: List[Optional[str]] = [None] * len(images)
         else:  # mode == 'vt'
             prior_texts = self._get_prior_text(pdf_path)
 
-        # Check that lengths match
         if len(prior_texts) != len(images):
             raise ValueError(
                 f"The number of prior texts ({len(prior_texts)}) does not match "
                 f"the number of images ({len(images)})."
             )
 
-        def process_page(
-            page_index: int, image: "Image.Image", prior_text: Optional[str]
-        ) -> tuple[int, str]:
-            """
-            Process a single page and return (index, content).
+        return images, prior_texts
 
-            Args:
-                page_index: Zero-based page index.
-                image: PIL Image of the page.
-                prior_text: Optional extracted text for context.
+    def _process_pages_parallel(
+        self,
+        images: List[Image.Image],
+        prior_texts: List[Optional[str]],
+        pdf_file_name: str,
+        verbose: bool,
+    ) -> tuple[dict[int, str], list[tuple[int, str]]]:
+        """
+        Process all pages in parallel using ThreadPoolExecutor.
 
-            Returns:
-                Tuple of (page_index, markdown_content_with_header).
-            """
-            logger.debug(
-                f"Starting page {page_index + 1}/{len(images)} "
-                f"(0-indexed: {page_index})"
-            )
-            image_base64 = self._pdf_image_to_base64_str(image)
-            markdown_text = self._process_image_with_provider(
-                image_base64,
-                prior_text,
-            )
-            logger.debug(
-                f"Completed page {page_index + 1}/{len(images)} "
-                f"(0-indexed: {page_index})"
-            )
-            page_header = f"File: {pdf_file_name}; Page: {page_index + 1}\n"
-            return page_index, page_header + markdown_text
+        Args:
+            images: List of page images.
+            prior_texts: List of prior text for each page.
+            pdf_file_name: Name of the PDF file for headers.
+            verbose: Whether to show progress bar.
 
-        # Process pages in parallel
-        results: dict[int, str] = {}
-        completion_order: list[int] = []
-        failed_pages: list[tuple[int, str]] = []  # (page_index, error_message)
+        Returns:
+            Tuple of (results dict, failed_pages list).
+            results: Maps page index to markdown content.
+            failed_pages: List of (page_index, error_message) tuples.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         total_pages = len(images)
+        results: dict[int, str] = {}
+        failed_pages: list[tuple[int, str]] = []
 
         logger.debug(
             f"Starting parallel extraction: {total_pages} pages, "
@@ -186,11 +217,13 @@ class VisionExtractor(BaseExtractor):
 
         with ThreadPoolExecutor(max_workers=self.max_parallel_pages) as executor:
             futures = {
-                executor.submit(process_page, ix, img, txt): ix
+                executor.submit(
+                    self._process_single_page, ix, img, txt, pdf_file_name,
+                    total_pages
+                ): ix
                 for ix, (img, txt) in enumerate(zip(images, prior_texts))
             }
 
-            # Use tqdm for progress if verbose
             iterator = as_completed(futures)
             if verbose:
                 iterator = tqdm(
@@ -202,10 +235,9 @@ class VisionExtractor(BaseExtractor):
                 try:
                     result_index, content = future.result()
                     results[result_index] = content
-                    completion_order.append(result_index)
                     logger.debug(
                         f"Collected result for page {result_index + 1} "
-                        f"(completion #{len(completion_order)})"
+                        f"(completed {len(results)}/{total_pages})"
                     )
                 except Exception as e:
                     failed_pages.append((page_index, str(e)))
@@ -213,7 +245,59 @@ class VisionExtractor(BaseExtractor):
                         f"FAILED: Page {page_index + 1} failed to process: {e}"
                     )
 
-        # Check for failed pages
+        return results, failed_pages
+
+    def _process_single_page(
+        self,
+        page_index: int,
+        image: Image.Image,
+        prior_text: Optional[str],
+        pdf_file_name: str,
+        total_pages: int,
+    ) -> tuple[int, str]:
+        """
+        Process a single page and return its markdown content.
+
+        Args:
+            page_index: Zero-based page index.
+            image: PIL Image of the page.
+            prior_text: Optional extracted text for context.
+            pdf_file_name: Name of the PDF file for header.
+            total_pages: Total number of pages (for logging).
+
+        Returns:
+            Tuple of (page_index, markdown_content_with_header).
+        """
+        logger.debug(
+            f"Starting page {page_index + 1}/{total_pages} "
+            f"(0-indexed: {page_index})"
+        )
+
+        image_base64 = self._pdf_image_to_base64_str(image)
+        markdown_text = self._process_image_with_provider(image_base64, prior_text)
+
+        logger.debug(
+            f"Completed page {page_index + 1}/{total_pages} "
+            f"(0-indexed: {page_index})"
+        )
+
+        page_header = f"File: {pdf_file_name}; Page: {page_index + 1}\n"
+        return page_index, page_header + markdown_text
+
+    def _log_processing_errors(
+        self,
+        failed_pages: list[tuple[int, str]],
+        total_pages: int,
+        results: dict[int, str],
+    ) -> None:
+        """
+        Log errors for failed or missing pages.
+
+        Args:
+            failed_pages: List of (page_index, error_message) tuples.
+            total_pages: Expected total number of pages.
+            results: Dict of successfully processed pages.
+        """
         if failed_pages:
             failed_nums = [p + 1 for p, _ in failed_pages]
             logger.error(
@@ -223,10 +307,10 @@ class VisionExtractor(BaseExtractor):
             for page_idx, error_msg in failed_pages:
                 logger.error(f"  Page {page_idx + 1}: {error_msg}")
 
-        # Check for missing pages
         expected_pages = set(range(total_pages))
         received_pages = set(results.keys())
         missing_pages = expected_pages - received_pages
+
         if missing_pages:
             missing_nums = sorted([p + 1 for p in missing_pages])
             logger.error(
@@ -234,12 +318,26 @@ class VisionExtractor(BaseExtractor):
                 f"received {len(results)}. Missing pages: {missing_nums}"
             )
 
-        # Reconstruct in page order
-        logger.debug(f"Completion order (0-indexed): {completion_order}")
+    def _assemble_markdown(
+        self,
+        results: dict[int, str],
+        total_pages: int,
+        pdf_file_name: str,
+    ) -> list[str]:
+        """
+        Assemble markdown content in correct page order.
+
+        Args:
+            results: Dict mapping page index to markdown content.
+            total_pages: Total number of pages expected.
+            pdf_file_name: Name of PDF file for error placeholders.
+
+        Returns:
+            List of markdown strings in page order.
+        """
         assembly_order = list(range(total_pages))
         logger.debug(f"Assembly order (0-indexed): {assembly_order}")
 
-        # Build markdown, inserting placeholder for missing pages
         markdown_content = []
         for i in assembly_order:
             if i in results:
@@ -251,7 +349,7 @@ class VisionExtractor(BaseExtractor):
                 )
                 markdown_content.append(placeholder)
 
-        # Verify assembly order matches expected sequence
+        # Verify assembly order
         assembled_indices = [i for i in assembly_order if i in results]
         if assembled_indices != sorted(assembled_indices):
             logger.error(
@@ -264,16 +362,7 @@ class VisionExtractor(BaseExtractor):
                 f"{[i + 1 for i in assembly_order]}"
             )
 
-        return ExtractionResult(
-            markdown="\n".join(markdown_content),
-            page_count=len(images),
-            metadata={
-                "extractor": "vision",
-                "model": self.model_id,
-                "mode": self.mode,
-                "max_parallel_pages": self.max_parallel_pages,
-            },
-        )
+        return markdown_content
 
     def _pdf_to_images_with_storage(
         self, pdf_path: str, output_dir: str
