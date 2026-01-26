@@ -76,6 +76,7 @@ class VisionExtractor(BaseExtractor):
         provider: "BaseProvider",
         model_id: str,
         mode: str = "vt",
+        max_parallel_pages: int = 10,
     ):
         """
         Initialize VisionExtractor.
@@ -84,10 +85,12 @@ class VisionExtractor(BaseExtractor):
             provider: LLM provider instance (from llm_providers module).
             model_id: Model identifier for the provider.
             mode: Processing mode - 'v' for vision-only, 'vt' for vision-and-text.
+            max_parallel_pages: Maximum number of pages to process in parallel.
         """
         self.provider = provider
         self.model_id = model_id
         self.mode = mode
+        self.max_parallel_pages = max_parallel_pages
 
         # Validate mode
         if mode not in ["v", "vt"]:
@@ -106,6 +109,9 @@ class VisionExtractor(BaseExtractor):
         """
         Extract markdown from PDF using vision LLM.
 
+        Pages are processed in parallel up to max_parallel_pages concurrent
+        requests. Results are reconstructed in correct page order.
+
         Args:
             pdf_path: Path to the PDF file.
             output_dir: Directory for cached images.
@@ -114,6 +120,8 @@ class VisionExtractor(BaseExtractor):
         Returns:
             ExtractionResult with markdown content.
         """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         pdf_file_name = os.path.basename(pdf_path)
 
         # Get images
@@ -132,23 +140,50 @@ class VisionExtractor(BaseExtractor):
                 f"the number of images ({len(images)})."
             )
 
-        # Build the markdown
-        markdown_content = []
-        iterator = zip(images, prior_texts)
-        if verbose:
-            iterator = tqdm(list(iterator), desc="Processing pages")
+        def process_page(
+            page_index: int, image: "Image.Image", prior_text: Optional[str]
+        ) -> tuple[int, str]:
+            """
+            Process a single page and return (index, content).
 
-        for ix, (image, prior_text) in enumerate(iterator):
+            Args:
+                page_index: Zero-based page index.
+                image: PIL Image of the page.
+                prior_text: Optional extracted text for context.
+
+            Returns:
+                Tuple of (page_index, markdown_content_with_header).
+            """
             image_base64 = self._pdf_image_to_base64_str(image)
             markdown_text = self._process_image_with_provider(
                 image_base64,
                 prior_text,
             )
-            page_header = f"File: {pdf_file_name}; Page: {ix + 1}\n"
-            markdown_content.append(page_header + markdown_text)
+            page_header = f"File: {pdf_file_name}; Page: {page_index + 1}\n"
+            return page_index, page_header + markdown_text
 
-            if verbose and not isinstance(iterator, tqdm):
-                print(page_header + markdown_text)
+        # Process pages in parallel
+        results: dict[int, str] = {}
+
+        with ThreadPoolExecutor(max_workers=self.max_parallel_pages) as executor:
+            futures = {
+                executor.submit(process_page, ix, img, txt): ix
+                for ix, (img, txt) in enumerate(zip(images, prior_texts))
+            }
+
+            # Use tqdm for progress if verbose
+            iterator = as_completed(futures)
+            if verbose:
+                iterator = tqdm(
+                    iterator, total=len(futures), desc="Processing pages"
+                )
+
+            for future in iterator:
+                page_index, content = future.result()
+                results[page_index] = content
+
+        # Reconstruct in page order
+        markdown_content = [results[i] for i in range(len(results))]
 
         return ExtractionResult(
             markdown="\n".join(markdown_content),
@@ -157,6 +192,7 @@ class VisionExtractor(BaseExtractor):
                 "extractor": "vision",
                 "model": self.model_id,
                 "mode": self.mode,
+                "max_parallel_pages": self.max_parallel_pages,
             },
         )
 

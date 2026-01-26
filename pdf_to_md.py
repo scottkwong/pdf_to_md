@@ -55,6 +55,7 @@ def create_extractor(
     llamaparse_tier: str = "agentic",
     language: str = "en",
     verbose: bool = False,
+    max_parallel_pages: int = 10,
 ) -> "BaseExtractor":
     """
     Create appropriate extractor based on type.
@@ -67,6 +68,7 @@ def create_extractor(
         llamaparse_tier: Processing tier for LlamaParse extractor.
         language: Document language for LlamaParse extractor.
         verbose: Enable verbose logging.
+        max_parallel_pages: Max pages to process in parallel (VisionExtractor).
 
     Returns:
         Configured BaseExtractor instance.
@@ -86,6 +88,7 @@ def create_extractor(
             provider=provider,
             model_id=model_id,
             mode=mode,
+            max_parallel_pages=max_parallel_pages,
         )
 
 
@@ -201,9 +204,12 @@ def print_cli_configuration(args: argparse.Namespace, model: str) -> None:
         print(f"  Model:              {model}")
         print(f"  Provider override:  {args.provider or '(none - auto-detect)'}")
         print(f"  Prefer OpenRouter:  {not args.prefer_direct}")
+        print(f"  Parallel pages:     {args.parallel}")
     print(f"  Verbose:            {args.verbose}")
     print(f"  Recursive:          {args.recursive}")
-    print(f"  Parallel:           {args.parallel}")
+    if args.recursive:
+        file_mode = "sequential" if args.single else "parallel"
+        print(f"  File processing:    {file_mode}")
     print()
 
 
@@ -448,10 +454,18 @@ if __name__ == "__main__":
     parser.add_argument(
         "-p",
         "--parallel",
+        type=int,
+        nargs="?",
+        const=10,
+        default=10,
+        help="Max parallel pages to process with VisionExtractor (default: 10).",
+    )
+    parser.add_argument(
+        "-s",
+        "--single",
         action="store_true",
         default=False,
-        help="If set, process each PDF file in parallel when using recursive "
-        "mode.",
+        help="Process files sequentially instead of in parallel when using -r.",
     )
     parser.add_argument(
         "--extractor",
@@ -523,20 +537,23 @@ if __name__ == "__main__":
             mode=args.mode,
             prefer_openrouter=prefer_openrouter,
             verbose=args.verbose,
+            max_parallel_pages=args.parallel,
         )
 
     # Process PDF(s) based on mode
     if args.recursive:
         validate_directory_path(args.target_path)
-        if args.parallel:
-            process_directory_parallel(
+        if args.single:
+            # Sequential processing when -s/--single is specified
+            process_directory_sequential(
                 args.target_path,
                 args.output_dir,
                 extractor,
                 args.verbose,
             )
         else:
-            process_directory_sequential(
+            # Default: parallel file processing
+            process_directory_parallel(
                 args.target_path,
                 args.output_dir,
                 extractor,
