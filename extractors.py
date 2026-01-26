@@ -9,10 +9,13 @@ This module can be extended to support additional extraction methods.
 """
 import base64
 import io
+import logging
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import List, Optional, TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 from pdf2image import convert_from_path
 from PIL import Image
@@ -154,16 +157,30 @@ class VisionExtractor(BaseExtractor):
             Returns:
                 Tuple of (page_index, markdown_content_with_header).
             """
+            logger.debug(
+                f"Starting page {page_index + 1}/{len(images)} "
+                f"(0-indexed: {page_index})"
+            )
             image_base64 = self._pdf_image_to_base64_str(image)
             markdown_text = self._process_image_with_provider(
                 image_base64,
                 prior_text,
+            )
+            logger.debug(
+                f"Completed page {page_index + 1}/{len(images)} "
+                f"(0-indexed: {page_index})"
             )
             page_header = f"File: {pdf_file_name}; Page: {page_index + 1}\n"
             return page_index, page_header + markdown_text
 
         # Process pages in parallel
         results: dict[int, str] = {}
+        completion_order: list[int] = []
+
+        logger.debug(
+            f"Starting parallel extraction: {len(images)} pages, "
+            f"max_workers={self.max_parallel_pages}"
+        )
 
         with ThreadPoolExecutor(max_workers=self.max_parallel_pages) as executor:
             futures = {
@@ -181,9 +198,21 @@ class VisionExtractor(BaseExtractor):
             for future in iterator:
                 page_index, content = future.result()
                 results[page_index] = content
+                completion_order.append(page_index)
+                logger.debug(
+                    f"Collected result for page {page_index + 1} "
+                    f"(completion #{len(completion_order)})"
+                )
 
         # Reconstruct in page order
-        markdown_content = [results[i] for i in range(len(results))]
+        logger.debug(f"Completion order (0-indexed): {completion_order}")
+        assembly_order = list(range(len(results)))
+        logger.debug(f"Assembly order (0-indexed): {assembly_order}")
+        markdown_content = [results[i] for i in assembly_order]
+        logger.debug(
+            f"Assembled {len(markdown_content)} pages in order: "
+            f"{[i + 1 for i in assembly_order]}"
+        )
 
         return ExtractionResult(
             markdown="\n".join(markdown_content),

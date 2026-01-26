@@ -7,6 +7,7 @@ file in the same directory with the same name as the PDF file. Supports
 multiple LLM providers via OpenRouter and direct APIs.
 """
 import argparse
+import logging
 import os
 import sys
 
@@ -206,6 +207,7 @@ def print_cli_configuration(args: argparse.Namespace, model: str) -> None:
         print(f"  Prefer OpenRouter:  {not args.prefer_direct}")
         print(f"  Parallel pages:     {args.parallel}")
     print(f"  Verbose:            {args.verbose}")
+    print(f"  Debug:              {args.debug}")
     print(f"  Recursive:          {args.recursive}")
     if args.recursive:
         file_mode = "sequential" if args.single else "parallel"
@@ -489,7 +491,22 @@ if __name__ == "__main__":
         default="en",
         help="Document language code for LlamaParse (default: 'en').",
     )
+    parser.add_argument(
+        "-d",
+        "--debug",
+        action="store_true",
+        default=False,
+        help="Enable debug logging for page processing order.",
+    )
     args = parser.parse_args()
+
+    # Configure logging based on debug flag
+    if args.debug:
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        )
     
     # Handle --list-models flag (before importing llm_providers)
     if args.list_models:
