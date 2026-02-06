@@ -9,7 +9,6 @@ All providers support vision processing with base64-encoded images.
 """
 import json
 import os
-import warnings
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Tuple
 
@@ -20,7 +19,6 @@ import google.genai as genai
 
 # Load environment variables
 load_dotenv()
-
 
 class BaseProvider(ABC):
     """Abstract base class for LLM providers."""
@@ -438,16 +436,44 @@ def get_available_models_for_keys() -> List[Dict]:
     models_config = load_models_config()
     available_models = []
 
-    # If OpenRouter is available, all models are available via OpenRouter
+    # If OpenRouter is available, use models with OpenRouter IDs first
     if available["openrouter"]:
         for model_name, model_config in models_config.items():
-            available_models.append(
-                {
-                    "name": model_name,
-                    "display_name": model_config.get("openrouter_id", ""),
-                    "provider": "openrouter",
-                }
-            )
+            openrouter_id = model_config.get("openrouter_id")
+            if openrouter_id:
+                available_models.append(
+                    {
+                        "name": model_name,
+                        "display_name": openrouter_id,
+                        "provider": "openrouter",
+                    }
+                )
+            else:
+                provider = model_config["provider"]
+                if provider == "openai" and available["openai"]:
+                    available_models.append(
+                        {
+                            "name": model_name,
+                            "display_name": model_config.get("direct_id", ""),
+                            "provider": provider,
+                        }
+                    )
+                elif provider == "google" and available["google"]:
+                    available_models.append(
+                        {
+                            "name": model_name,
+                            "display_name": model_config.get("direct_id", ""),
+                            "provider": provider,
+                        }
+                    )
+                elif provider == "anthropic" and available["anthropic"]:
+                    available_models.append(
+                        {
+                            "name": model_name,
+                            "display_name": model_config.get("direct_id", ""),
+                            "provider": provider,
+                        }
+                    )
     else:
         # Otherwise, check direct provider APIs
         for model_name, model_config in models_config.items():
@@ -548,9 +574,10 @@ def resolve_model(
 
     # Determine which provider to use
     use_openrouter = False
-    if prefer_openrouter and available["openrouter"]:
+    openrouter_id = model_config.get("openrouter_id")
+    if prefer_openrouter and available["openrouter"] and openrouter_id:
         use_openrouter = True
-        model_id = model_config["openrouter_id"]
+        model_id = openrouter_id
         provider = OpenRouterProvider()
     elif provider_name == "openai" and available["openai"]:
         model_id = model_config["direct_id"]
