@@ -436,72 +436,45 @@ def get_available_models_for_keys() -> List[Dict]:
     models_config = load_models_config()
     available_models = []
 
+    def add_direct_model(
+        name: str, config: Dict, provider_name: str
+    ) -> None:
+        if available.get(provider_name):
+            available_models.append(
+                {
+                    "name": name,
+                    "display_name": config.get("direct_id", ""),
+                    "provider": provider_name,
+                }
+            )
+
+    def add_openrouter_model(name: str, config: Dict) -> bool:
+        openrouter_id = config.get("openrouter_id")
+        if not openrouter_id:
+            return False
+        available_models.append(
+            {
+                "name": name,
+                "display_name": openrouter_id,
+                "provider": "openrouter",
+            }
+        )
+        return True
+
     # If OpenRouter is available, use models with OpenRouter IDs first
     if available["openrouter"]:
         for model_name, model_config in models_config.items():
-            openrouter_id = model_config.get("openrouter_id")
-            if openrouter_id:
-                available_models.append(
-                    {
-                        "name": model_name,
-                        "display_name": openrouter_id,
-                        "provider": "openrouter",
-                    }
-                )
-            else:
-                provider = model_config["provider"]
-                if provider == "openai" and available["openai"]:
-                    available_models.append(
-                        {
-                            "name": model_name,
-                            "display_name": model_config.get("direct_id", ""),
-                            "provider": provider,
-                        }
-                    )
-                elif provider == "google" and available["google"]:
-                    available_models.append(
-                        {
-                            "name": model_name,
-                            "display_name": model_config.get("direct_id", ""),
-                            "provider": provider,
-                        }
-                    )
-                elif provider == "anthropic" and available["anthropic"]:
-                    available_models.append(
-                        {
-                            "name": model_name,
-                            "display_name": model_config.get("direct_id", ""),
-                            "provider": provider,
-                        }
-                    )
+            if add_openrouter_model(model_name, model_config):
+                continue
+            add_direct_model(
+                model_name, model_config, model_config["provider"]
+            )
     else:
         # Otherwise, check direct provider APIs
         for model_name, model_config in models_config.items():
-            provider = model_config["provider"]
-            if provider == "openai" and available["openai"]:
-                available_models.append(
-                    {
-                        "name": model_name,
-                        "display_name": model_config.get("direct_id", ""),
-                        "provider": provider,
-                    }
-                )
-            elif provider == "google" and available["google"]:
-                available_models.append(
-                    {
-                        "name": model_name,
-                        "display_name": model_config.get("direct_id", ""),
-                        "provider": provider,
-                    }
-                )
-            elif provider == "anthropic" and available["anthropic"]:
-                available_models.append(
-                    {
-                        "name": model_name,
-                        "display_name": model_config.get("direct_id", ""),
-                        "provider": provider,
-                    }
-                )
+            add_direct_model(
+                model_name, model_config, model_config["provider"]
+            )
 
     return available_models
 
