@@ -197,9 +197,10 @@ To utilize additional options:
 - `openai-gpt4o` - OpenAI GPT-4o
 - `gemini-3-flash` - Google Gemini 3 Flash
 - `gemini-3-pro` - Google Gemini 3 Pro
-- `claude-sonnet-4.5` - Anthropic Claude 3.5 Sonnet
-- `claude-opus-4.5` - Anthropic Claude 3.5 Opus
-- `claude-haiku-4.5` - Anthropic Claude 3.5 Haiku
+- `claude-sonnet-4.5` - Anthropic Claude Sonnet 4.5
+- `claude-opus-4.5` - Anthropic Claude Opus 4.5
+- `claude-opus-4.6` - Anthropic Claude Opus 4.6
+- `claude-haiku-4.5` - Anthropic Claude Haiku 4.5
 
 **Examples:**
 

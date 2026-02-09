@@ -36,6 +36,12 @@
     "direct_id": "claude-opus-4-5-20251101",
     "supports_vision": true
   },
+  "claude-opus-4.6": {
+    "provider": "anthropic",
+    "openrouter_id": "anthropic/claude-opus-4.6",
+    "direct_id": "claude-opus-4-6",
+    "supports_vision": true
+  },
   "claude-haiku-4.5": {
     "provider": "anthropic",
     "openrouter_id": "anthropic/claude-haiku-4.5",
