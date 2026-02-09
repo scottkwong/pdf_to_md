@@ -109,18 +109,23 @@ def ensure_default_fixture_pdfs() -> List[str]:
     """
     fixture_dir = os.path.join("tests", "fixtures")
     os.makedirs(fixture_dir, exist_ok=True)
-    fixture_paths = [
+    small_path = os.path.join(fixture_dir, "benchmark_small.pdf")
+    if not os.path.exists(small_path):
         create_benchmark_fixture_pdf(
-            output_path=os.path.join(fixture_dir, "benchmark_small.pdf"),
+            output_path=small_path,
             num_pages=5,
             title_prefix="Benchmark Small",
-        ),
+        )
+
+    large_path = os.path.join(fixture_dir, "benchmark_large.pdf")
+    if not os.path.exists(large_path):
         create_benchmark_fixture_pdf(
-            output_path=os.path.join(fixture_dir, "benchmark_large.pdf"),
+            output_path=large_path,
             num_pages=12,
             title_prefix="Benchmark Large",
-        ),
-    ]
+        )
+
+    fixture_paths = [small_path, large_path]
     return fixture_paths
 
 

@@ -25,6 +25,17 @@ Install the required dependencies:
 pip install -r requirements.txt
 ```
 
+Optional: install PyMuPDF for faster first-pass text extraction (compiled
+dependency; wheel/build behavior can vary by architecture):
+
+```bash
+pip install pymupdf
+```
+
+If PyMuPDF install fails on your machine, you can skip it and continue with
+PyPDF2. The CLI defaults to `auto`, which prefers PyMuPDF when installed and
+falls back to PyPDF2 otherwise.
+
 If you don't have `poppler` installed, see [Additional Dependencies](#additional-dependencies).
 
 ### API Keys
@@ -158,6 +169,13 @@ Before running `pdf_to_md.py`, ensure the shebang line (first line in the file) 
 
 Convert PDF files to Markdown format using LLM vision models. It supports processing a single file or multiple files within a directory, optionally in parallel. The script provides several options including model selection, provider choice, output directory specification, processing modes, verbosity, and recursive directory processing.
 
+The PDF pipeline is:
+
+1. Extract per-page first-pass text with a direct parser backend
+   (`pypdf2` or `pymupdf`).
+2. If mode is `vt`, pass page image + first-pass text to the LLM provider.
+3. If mode is `v`, pass only the page image to the LLM provider.
+
 ### Basic Usage
 
 To convert a PDF file (defaults to OpenAI GPT-5.2 via OpenRouter):
@@ -180,6 +198,7 @@ To utilize additional options:
 - `--list-models`: List all available models and show the default, then exit.
 - `-o`, `--output_dir <output_directory>`: Destination for Markdown files. Defaults to PDF's location if unspecified.
 - `-m`, `--mode <mode>`: Sets processing mode. Choose 'v' for vision-only or 'vt' for vision-and-text (default: 'vt').
+- `--text-extractor-backend <backend>`: Backend used for first-pass text extraction in `vt` mode. Options: `auto` (default), `pypdf2`, `pymupdf`.
 - `--model <model>`: Model identifier from `models.json` to use for both vision and text processing (default: `gpt-5.2`).
 - `--provider <provider>`: Force specific provider: `openrouter`, `openai`, `anthropic`, or `google` (optional).
 - `--prefer-direct`: Skip OpenRouter and use direct APIs only.
@@ -191,6 +210,9 @@ To utilize additional options:
 - `--extractor <extractor>`: Extraction method: `vision` (default, LLM-based) or `llamaparse` (LlamaCloud API).
 - `--llamaparse-tier <tier>`: LlamaParse processing tier (only with `--extractor llamaparse`): `fast`, `cost_effective`, `agentic` (default), `agentic_plus`.
 - `--language <lang>`: Document language code for LlamaParse (default: `en`).
+- `--benchmark-text-extractors`: Run a direct package benchmark (no LLM calls) comparing PyPDF2 and PyMuPDF, then exit.
+- `--benchmark-runs <N>`: Number of benchmark runs per backend (default: `10`).
+- `--benchmark-pdf <path>`: Optional PDF override for benchmark mode. If omitted, benchmark uses generated fixture PDFs from `tests/fixtures`.
 
 **Available Models** (defined in `models.json`):
 - `gpt-5.2` - OpenAI GPT-5.2 (default)
@@ -243,6 +265,15 @@ To utilize additional options:
 
 # Use LlamaParse for non-English documents
 ./pdf_to_md.py document.pdf --extractor llamaparse --language de
+
+# Force PyPDF2 first-pass text parser
+./pdf_to_md.py document.pdf --text-extractor-backend pypdf2
+
+# Run parser benchmark against generated fixture PDFs (default path)
+./pdf_to_md.py --benchmark-text-extractors --benchmark-runs 10
+
+# Run parser benchmark against a specific PDF
+./pdf_to_md.py --benchmark-text-extractors --benchmark-pdf document.pdf
 ```
 
 ### Extraction Methods
@@ -252,6 +283,12 @@ The tool supports two extraction methods:
 **Vision-based extraction (default):** Converts PDF pages to images and uses
 vision-capable LLMs (GPT-4, Claude, Gemini) to interpret each page. Best for
 documents where visual layout is important.
+
+When mode is `vt` (default), vision extraction includes first-pass text from a
+direct parser backend:
+- `auto` (default): prefers PyMuPDF when installed, otherwise PyPDF2
+- `pypdf2`: forces PyPDF2 backend
+- `pymupdf`: forces PyMuPDF backend (requires `pip install pymupdf`)
 
 **LlamaParse extraction:** Uses LlamaIndex's LlamaParse API for document-level
 extraction. Optimized for structured documents like financial reports and
@@ -289,6 +326,28 @@ This will:
 - Provide a summary of results
 
 Tests use your `.env` file for API keys (no hardcoded values).
+
+### Parser backend and setup tests (no LLM calls)
+
+These tests validate direct parser correctness and installation behavior:
+
+```bash
+python -m pytest tests/test_text_extractor_backends.py
+python -m pytest tests/test_installation_setup.py
+python -m pytest tests/test_benchmark_text_extractors.py
+```
+
+### Text parser benchmark
+
+Benchmark direct package extraction with mean and standard deviation:
+
+```bash
+# Default: generated fixture PDFs in tests/fixtures
+python pdf_to_md.py --benchmark-text-extractors --benchmark-runs 10
+
+# Override input PDF
+python pdf_to_md.py --benchmark-text-extractors --benchmark-pdf path/to/file.pdf
+```
 
 
 ## License
@@ -329,3 +388,24 @@ pdftoppm -v
 ```
 
 This command should return the version of `pdftoppm` if `poppler-utils` is installed correctly.
+
+### Optional: PyMuPDF
+
+PyMuPDF is optional and can be used as the first-pass text parser backend:
+
+```bash
+pip install pymupdf
+```
+
+Verification:
+
+```bash
+python -c "import fitz; print(fitz.__doc__.splitlines()[0])"
+```
+
+If installation fails due to architecture-specific wheel/build issues, use
+PyPDF2 only:
+
+```bash
+./pdf_to_md.py document.pdf --text-extractor-backend pypdf2
+```

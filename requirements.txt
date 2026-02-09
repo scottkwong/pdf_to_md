@@ -6,6 +6,9 @@ pdf2image
 Pillow
 pycryptodome==3.14.1
 PyPDF2
+# Optional first-pass PDF parser backend (compiled package; architecture-
+# specific wheel/build path):
+# pymupdf>=1.24.0
 python-dotenv
 reportlab
 tenacity
