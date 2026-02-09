@@ -221,6 +221,30 @@ class TestCLIArguments:
         args = parser.parse_args(["-s"])
         assert args.single is True
 
+    def test_text_extractor_backend_default_auto(self):
+        """Test text extractor backend defaults to auto."""
+        parser = argparse.ArgumentParser()
+        parser.add_argument(
+            "--text-extractor-backend",
+            type=str,
+            choices=["auto", "pypdf2", "pymupdf"],
+            default="auto",
+        )
+        args = parser.parse_args([])
+        assert args.text_extractor_backend == "auto"
+
+    def test_text_extractor_backend_override(self):
+        """Test text extractor backend can be explicitly selected."""
+        parser = argparse.ArgumentParser()
+        parser.add_argument(
+            "--text-extractor-backend",
+            type=str,
+            choices=["auto", "pypdf2", "pymupdf"],
+            default="auto",
+        )
+        args = parser.parse_args(["--text-extractor-backend", "pypdf2"])
+        assert args.text_extractor_backend == "pypdf2"
+
 
 class TestIntegrationWithRealPDF:
     """Integration tests using a real PDF file with mock provider."""

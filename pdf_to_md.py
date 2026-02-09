@@ -52,6 +52,7 @@ def create_extractor(
     extractor_type: str,
     model: str = "gpt-5.2",
     mode: str = "vt",
+    text_extractor_backend: str = "auto",
     prefer_openrouter: bool = True,
     llamaparse_tier: str = "agentic",
     language: str = "en",
@@ -65,6 +66,8 @@ def create_extractor(
         extractor_type: Type of extractor ('vision' or 'llamaparse').
         model: Model identifier for vision extractor.
         mode: Processing mode for vision extractor ('v' or 'vt').
+        text_extractor_backend: Backend for first-pass PDF text extraction in
+            vision+text mode. One of: auto, pypdf2, pymupdf.
         prefer_openrouter: Whether to prefer OpenRouter for vision extractor.
         llamaparse_tier: Processing tier for LlamaParse extractor.
         language: Document language for LlamaParse extractor.
@@ -90,6 +93,7 @@ def create_extractor(
             model_id=model_id,
             mode=mode,
             max_parallel_pages=max_parallel_pages,
+            text_extractor_backend=text_extractor_backend,
         )
 
 
@@ -202,10 +206,16 @@ def print_cli_configuration(args: argparse.Namespace, model: str) -> None:
         print(f"  Language:           {args.language}")
     else:
         print(f"  Mode:               {args.mode}")
+        print(f"  Text backend:       {args.text_extractor_backend}")
         print(f"  Model:              {model}")
         print(f"  Provider override:  {args.provider or '(none - auto-detect)'}")
         print(f"  Prefer OpenRouter:  {not args.prefer_direct}")
         print(f"  Parallel pages:     {args.parallel}")
+    if args.benchmark_text_extractors:
+        benchmark_target = args.benchmark_pdf or "(default generated fixtures)"
+        print(f"  Benchmark mode:     {args.benchmark_text_extractors}")
+        print(f"  Benchmark runs:     {args.benchmark_runs}")
+        print(f"  Benchmark target:   {benchmark_target}")
     print(f"  Verbose:            {args.verbose}")
     print(f"  Debug:              {args.debug}")
     print(f"  Recursive:          {args.recursive}")
@@ -498,6 +508,35 @@ if __name__ == "__main__":
         default=False,
         help="Enable debug logging for page processing order.",
     )
+    parser.add_argument(
+        "--text-extractor-backend",
+        type=str,
+        choices=["auto", "pypdf2", "pymupdf"],
+        default="auto",
+        help="Backend for first-pass PDF text extraction in mode 'vt'. "
+        "Defaults to 'auto' (prefers PyMuPDF when installed).",
+    )
+    parser.add_argument(
+        "--benchmark-text-extractors",
+        action="store_true",
+        default=False,
+        help="Run a non-LLM benchmark that compares direct text extraction "
+        "backends (PyPDF2 vs PyMuPDF) and exit.",
+    )
+    parser.add_argument(
+        "--benchmark-runs",
+        type=int,
+        default=10,
+        help="Number of extraction runs per backend when benchmark mode is "
+        "enabled (default: 10).",
+    )
+    parser.add_argument(
+        "--benchmark-pdf",
+        type=str,
+        default=None,
+        help="Optional PDF path override for benchmark mode. If omitted, "
+        "generated fixture PDFs are used.",
+    )
     args = parser.parse_args()
 
     # Configure logging - always show errors, debug only with -d flag
@@ -519,7 +558,7 @@ if __name__ == "__main__":
         sys.exit(0)
     
     # Require target_path if not listing models
-    if not args.target_path:
+    if not args.target_path and not args.benchmark_text_extractors:
         parser.error("target_path is required unless using --list-models")
 
     # Extract configuration from args
@@ -528,6 +567,18 @@ if __name__ == "__main__":
 
     # Print configuration
     print_cli_configuration(args, model)
+
+    if args.benchmark_text_extractors:
+        from benchmark_text_extractors import (
+            benchmark_text_extractors,
+            print_benchmark_report,
+        )
+        summary = benchmark_text_extractors(
+            runs=args.benchmark_runs,
+            pdf_path=args.benchmark_pdf,
+        )
+        print_benchmark_report(summary)
+        sys.exit(0)
 
     # Create extractor and handle model resolution
     extractor = None
@@ -557,6 +608,7 @@ if __name__ == "__main__":
             extractor_type="vision",
             model=model,
             mode=args.mode,
+            text_extractor_backend=args.text_extractor_backend,
             prefer_openrouter=prefer_openrouter,
             verbose=args.verbose,
             max_parallel_pages=args.parallel,
