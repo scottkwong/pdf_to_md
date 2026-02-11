@@ -21,7 +21,10 @@ from pdf2image import convert_from_path
 from PIL import Image
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 from tqdm import tqdm
-from text_parsers import BaseTextParser, create_text_parser
+from digital_text_parsers import (
+    BaseDigitalTextParser,
+    create_digital_text_parser,
+)
 
 if TYPE_CHECKING:
     from llm_providers import BaseProvider
@@ -80,7 +83,7 @@ class VisionExtractor(BaseExtractor):
         model_id: str,
         mode: str = "vt",
         max_parallel_pages: int = 10,
-        text_extractor_backend: str = "auto",
+        digital_text_parser: str = "auto",
     ):
         """
         Initialize VisionExtractor.
@@ -90,15 +93,19 @@ class VisionExtractor(BaseExtractor):
             model_id: Model identifier for the provider.
             mode: Processing mode - 'v' for vision-only, 'vt' for vision-and-text.
             max_parallel_pages: Maximum number of pages to process in parallel.
-            text_extractor_backend: Backend used for first-pass text extraction
-                in 'vt' mode. Valid values are auto, pypdf2, and pymupdf.
+            digital_text_parser: Parser engine used for first-pass digital text
+                parsing in 'vt' mode. Valid values are auto, pypdf2, pymupdf.
         """
         self.provider = provider
         self.model_id = model_id
         self.mode = mode
         self.max_parallel_pages = max_parallel_pages
-        self._text_parser_selection = create_text_parser(text_extractor_backend)
-        self.text_parser: BaseTextParser = self._text_parser_selection.parser
+        self._digital_text_parser_selection = create_digital_text_parser(
+            digital_text_parser
+        )
+        self.digital_text_parser: BaseDigitalTextParser = (
+            self._digital_text_parser_selection.parser
+        )
 
         # Validate mode
         if mode not in ["v", "vt"]:
@@ -154,11 +161,11 @@ class VisionExtractor(BaseExtractor):
                 "model": self.model_id,
                 "mode": self.mode,
                 "max_parallel_pages": self.max_parallel_pages,
-                "text_extractor_backend_requested": (
-                    self._text_parser_selection.requested_backend
+                "digital_text_parser_requested": (
+                    self._digital_text_parser_selection.requested_parser
                 ),
-                "text_extractor_backend_resolved": (
-                    self._text_parser_selection.resolved_backend
+                "digital_text_parser_resolved": (
+                    self._digital_text_parser_selection.resolved_parser
                 ),
             },
         )
@@ -393,7 +400,7 @@ class VisionExtractor(BaseExtractor):
 
         if not os.path.exists(image_folder):
             os.makedirs(image_folder)
-            images = convert_from_path(pdf_path)
+            images = convert_from_path(pdf_path, thread_count=os.cpu_count())
             for i, image in enumerate(images):
                 image.save(os.path.join(image_folder, f"{base_name}_image_{i}.png"))
         else:
@@ -417,7 +424,7 @@ class VisionExtractor(BaseExtractor):
         Returns:
             List of strings, one per page.
         """
-        return self.text_parser.extract_pages(pdf_path)
+        return self.digital_text_parser.extract_pages(pdf_path)
 
     def _pdf_image_to_base64_str(self, pdf_page: Image.Image) -> str:
         """

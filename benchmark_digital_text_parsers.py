@@ -1,8 +1,8 @@
 """
-Benchmark direct PDF text extraction backends.
+Benchmark digital PDF text parser engines.
 
-This module compares first-pass PDF text extraction speed across supported
-parser backends. It avoids model calls and can run against either a user-
+This module compares first-pass digital text parsing speed across supported
+parser engines. It avoids model calls and can run against either a user-
 provided PDF or generated deterministic fixture PDFs from the test suite.
 """
 
@@ -14,23 +14,26 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List
 
-from text_parsers import create_text_parser, is_pymupdf_available
+from digital_text_parsers import (
+    create_digital_text_parser,
+    is_pymupdf_available,
+)
 from tests.create_test_pdf import ensure_default_fixture_pdfs
 
 
 @dataclass
-class BackendBenchmarkStats:
-    """Per-backend benchmark statistics.
+class ParserBenchmarkStats:
+    """Per-parser benchmark statistics.
 
     Attributes:
-        backend: Backend identifier.
+        parser_name: Parser identifier.
         runs: Number of completed benchmark runs.
         durations: Durations for each run in seconds.
         mean_seconds: Mean duration in seconds.
         stdev_seconds: Sample standard deviation in seconds.
     """
 
-    backend: str
+    parser_name: str
     runs: int
     durations: List[float]
     mean_seconds: float
@@ -39,11 +42,11 @@ class BackendBenchmarkStats:
 
 @dataclass
 class BenchmarkSummary:
-    """Summary output for backend benchmark execution."""
+    """Summary output for parser benchmark execution."""
 
     pdf_paths: List[str]
-    stats: Dict[str, BackendBenchmarkStats]
-    winner_backend: str
+    stats: Dict[str, ParserBenchmarkStats]
+    winner_parser: str
 
 
 def _resolve_benchmark_inputs(pdf_path: str | None) -> List[str]:
@@ -68,43 +71,43 @@ def _resolve_benchmark_inputs(pdf_path: str | None) -> List[str]:
     return ensure_default_fixture_pdfs()
 
 
-def _run_backend_once(backend: str, pdf_paths: List[str]) -> float:
-    """Run one extraction pass for a backend across all PDFs.
+def _run_parser_once(parser_name: str, pdf_paths: List[str]) -> float:
+    """Run one extraction pass for a parser engine across all PDFs.
 
     Args:
-        backend: Backend identifier (`pypdf2` or `pymupdf`).
+        parser_name: Parser identifier (`pypdf2` or `pymupdf`).
         pdf_paths: Ordered list of PDF paths to process.
 
     Returns:
         Elapsed duration in seconds.
     """
-    parser = create_text_parser(backend).parser
+    parser = create_digital_text_parser(parser_name).parser
     start = time.perf_counter()
     for path in pdf_paths:
         parser.extract_pages(path)
     return time.perf_counter() - start
 
 
-def _available_backends() -> List[str]:
-    """Return benchmarkable backend identifiers for current environment."""
+def _available_parsers() -> List[str]:
+    """Return benchmarkable parser identifiers for current environment."""
     backends = ["pypdf2"]
     if is_pymupdf_available():
         backends.append("pymupdf")
     return backends
 
 
-def benchmark_text_extractors(
+def benchmark_digital_text_parsers(
     runs: int = 10,
     pdf_path: str | None = None,
 ) -> BenchmarkSummary:
-    """Benchmark direct text extraction backends.
+    """Benchmark digital text parser engines.
 
     Args:
-        runs: Number of runs per backend.
+        runs: Number of runs per parser.
         pdf_path: Optional user-provided PDF path override.
 
     Returns:
-        Benchmark summary with per-backend statistics and winner.
+        Benchmark summary with per-parser statistics and winner.
 
     Raises:
         ValueError: If runs is invalid or benchmark input is invalid.
@@ -113,28 +116,30 @@ def benchmark_text_extractors(
         raise ValueError("Benchmark runs must be >= 1.")
 
     paths = _resolve_benchmark_inputs(pdf_path=pdf_path)
-    stats: Dict[str, BackendBenchmarkStats] = {}
+    stats: Dict[str, ParserBenchmarkStats] = {}
 
-    for backend in _available_backends():
+    for parser_name in _available_parsers():
         durations: List[float] = []
         for _ in range(runs):
-            durations.append(_run_backend_once(backend=backend, pdf_paths=paths))
+            durations.append(
+                _run_parser_once(parser_name=parser_name, pdf_paths=paths)
+            )
 
         mean_seconds = statistics.mean(durations)
         stdev_seconds = statistics.stdev(durations) if runs > 1 else 0.0
-        stats[backend] = BackendBenchmarkStats(
-            backend=backend,
+        stats[parser_name] = ParserBenchmarkStats(
+            parser_name=parser_name,
             runs=runs,
             durations=durations,
             mean_seconds=mean_seconds,
             stdev_seconds=stdev_seconds,
         )
 
-    winner_backend = min(stats.items(), key=lambda item: item[1].mean_seconds)[0]
+    winner_parser = min(stats.items(), key=lambda item: item[1].mean_seconds)[0]
     return BenchmarkSummary(
         pdf_paths=paths,
         stats=stats,
-        winner_backend=winner_backend,
+        winner_parser=winner_parser,
     )
 
 
@@ -145,20 +150,20 @@ def print_benchmark_report(summary: BenchmarkSummary) -> None:
         summary: Completed benchmark summary.
     """
     print("=" * 70)
-    print("Text Extractor Benchmark (direct package extraction)")
+    print("Digital Text Parser Benchmark (direct package extraction)")
     print("=" * 70)
     print("Input PDFs:")
     for path in summary.pdf_paths:
         print(f"  - {path}")
     print()
-    print("Backend results:")
-    for backend_name, backend_stats in sorted(summary.stats.items()):
+    print("Parser results:")
+    for parser_name, parser_stats in sorted(summary.stats.items()):
         print(
-            f"  {backend_name:10} "
-            f"mean={backend_stats.mean_seconds:.6f}s "
-            f"stdev={backend_stats.stdev_seconds:.6f}s "
-            f"runs={backend_stats.runs}"
+            f"  {parser_name:10} "
+            f"mean={parser_stats.mean_seconds:.6f}s "
+            f"stdev={parser_stats.stdev_seconds:.6f}s "
+            f"runs={parser_stats.runs}"
         )
     print()
-    print(f"Winner (fastest mean): {summary.winner_backend}")
+    print(f"Winner (fastest mean): {summary.winner_parser}")
     print("=" * 70)

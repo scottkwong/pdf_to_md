@@ -1,8 +1,8 @@
 """
-Correctness tests for PDF text extraction backends.
+Correctness tests for digital PDF text parser engines.
 
 This suite validates direct package extraction with PyPDF2 and optional
-PyMuPDF using deterministic fixture PDFs. It also verifies backend auto-
+PyMuPDF using deterministic fixture PDFs. It also verifies parser auto-
 selection behavior for environments with or without PyMuPDF installed.
 """
 
@@ -13,7 +13,11 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from text_parsers import create_text_parser, is_pymupdf_available
+from digital_text_parsers import (
+    create_digital_text_parser,
+    get_available_digital_text_parsers,
+    is_pymupdf_available,
+)
 from tests.create_test_pdf import ensure_default_fixture_pdfs
 
 
@@ -32,19 +36,27 @@ def _assert_fixture_markers(page_texts: list[str]) -> None:
 def test_pypdf2_extraction_on_generated_fixture() -> None:
     """Validate PyPDF2 extraction against generated benchmark fixture."""
     fixture_path = ensure_default_fixture_pdfs()[0]
-    parser = create_text_parser("pypdf2").parser
+    parser = create_digital_text_parser("pypdf2").parser
     pages = parser.extract_pages(fixture_path)
     assert len(pages) == 5
     _assert_fixture_markers(pages)
 
 
 def test_auto_backend_resolution() -> None:
-    """Validate backend resolution policy for auto selection."""
-    selection = create_text_parser("auto")
+    """Validate parser resolution policy for auto selection."""
+    selection = create_digital_text_parser("auto")
     if is_pymupdf_available():
-        assert selection.resolved_backend == "pymupdf"
+        assert selection.resolved_parser == "pymupdf"
     else:
-        assert selection.resolved_backend == "pypdf2"
+        assert selection.resolved_parser == "pypdf2"
+
+
+def test_available_backends_reported() -> None:
+    """Validate available parser listing includes expected entries."""
+    available = get_available_digital_text_parsers()
+    assert "pypdf2" in available
+    if is_pymupdf_available():
+        assert "pymupdf" in available
 
 
 @pytest.mark.skipif(
@@ -54,15 +66,15 @@ def test_auto_backend_resolution() -> None:
 def test_pymupdf_extraction_on_generated_fixture() -> None:
     """Validate PyMuPDF extraction when dependency is installed."""
     fixture_path = ensure_default_fixture_pdfs()[0]
-    parser = create_text_parser("pymupdf").parser
+    parser = create_digital_text_parser("pymupdf").parser
     pages = parser.extract_pages(fixture_path)
     assert len(pages) == 5
     _assert_fixture_markers(pages)
 
 
 def run_all_tests() -> bool:
-    """Run backend correctness tests and return pass/fail status."""
-    print("Running text extractor backend correctness tests...\n")
+    """Run parser correctness tests and return pass/fail status."""
+    print("Running digital text parser correctness tests...\n")
     try:
         test_pypdf2_extraction_on_generated_fixture()
         test_auto_backend_resolution()
@@ -73,13 +85,13 @@ def run_all_tests() -> bool:
             pymupdf_status = "SKIPPED (PyMuPDF not installed)"
 
         print("\n" + "=" * 50)
-        print("Text Extractor Backend Test Summary:")
+        print("Digital Text Parser Test Summary:")
         print("=" * 50)
         print("PyPDF2: PASSED")
         print(f"PyMuPDF: {pymupdf_status}")
         return True
     except Exception as exc:
-        print(f"Text extractor backend tests failed: {exc}")
+        print(f"Digital text parser tests failed: {exc}")
         return False
 
 
