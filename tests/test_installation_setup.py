@@ -15,7 +15,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from text_parsers import is_pymupdf_available
+from digital_text_parsers import is_pymupdf_available
 
 
 REQUIRED_IMPORTS = [

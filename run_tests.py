@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from llm_providers import get_available_providers
 from tests.test_installation_setup import run_all_tests as run_setup_tests
-from tests.test_text_extractor_backends import run_all_tests as run_parser_tests
+from tests.test_digital_text_parsers import run_all_tests as run_parser_tests
 from tests.test_pdf_processing import run_all_tests as run_vision_tests
 from tests.test_text_processing import run_all_tests as run_text_tests
 from tests.test_llamaparse import run_all_tests as run_llamaparse_tests
@@ -38,7 +38,7 @@ def main():
     setup_success = run_setup_tests()
 
     print("\n" + "=" * 60)
-    print("TEXT PARSER BACKEND TESTS")
+    print("DIGITAL TEXT PARSER TESTS")
     print("=" * 60)
     parser_success = run_parser_tests()
 
@@ -91,7 +91,7 @@ def main():
     print("FINAL SUMMARY")
     print("=" * 60)
     print(f"Installation/Setup: {'PASSED' if setup_success else 'FAILED'}")
-    print(f"Text Parser Backends: {'PASSED' if parser_success else 'FAILED'}")
+    print(f"Digital Text Parsers: {'PASSED' if parser_success else 'FAILED'}")
     print(f"Text Processing: {'PASSED' if text_success else 'FAILED'}")
     print(f"Vision Processing: {'PASSED' if vision_success else 'FAILED'}")
     print(f"LlamaParse Extraction: {'PASSED' if llamaparse_success else 'FAILED'}")
