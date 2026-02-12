@@ -75,7 +75,7 @@ def _run_parser_once(parser_name: str, pdf_paths: List[str]) -> float:
     """Run one extraction pass for a parser engine across all PDFs.
 
     Args:
-        parser_name: Parser identifier (`pypdf2` or `pymupdf`).
+        parser_name: Parser identifier (`pypdf` or `pymupdf`).
         pdf_paths: Ordered list of PDF paths to process.
 
     Returns:
@@ -90,7 +90,7 @@ def _run_parser_once(parser_name: str, pdf_paths: List[str]) -> float:
 
 def _available_parsers() -> List[str]:
     """Return benchmarkable parser identifiers for current environment."""
-    backends = ["pypdf2"]
+    backends = ["pypdf"]
     if is_pymupdf_available():
         backends.append("pymupdf")
     return backends

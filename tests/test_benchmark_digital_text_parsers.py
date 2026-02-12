@@ -20,8 +20,8 @@ def test_benchmark_uses_default_generated_fixtures() -> None:
     assert summary.pdf_paths
     for path in summary.pdf_paths:
         assert os.path.isfile(path)
-    assert "pypdf2" in summary.stats
-    assert summary.stats["pypdf2"].runs == 1
+    assert "pypdf" in summary.stats
+    assert summary.stats["pypdf"].runs == 1
 
 
 def test_benchmark_uses_user_supplied_pdf(tmp_path) -> None:
@@ -34,4 +34,4 @@ def test_benchmark_uses_user_supplied_pdf(tmp_path) -> None:
     )
     summary = benchmark_digital_text_parsers(runs=2, pdf_path=custom_pdf)
     assert summary.pdf_paths == [custom_pdf]
-    assert summary.stats["pypdf2"].runs == 2
+    assert summary.stats["pypdf"].runs == 2

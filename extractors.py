@@ -94,7 +94,7 @@ class VisionExtractor(BaseExtractor):
             mode: Processing mode - 'v' for vision-only, 'vt' for vision-and-text.
             max_parallel_pages: Maximum number of pages to process in parallel.
             digital_text_parser: Parser engine used for first-pass digital text
-                parsing in 'vt' mode. Valid values are auto, pypdf2, pymupdf.
+                parsing in 'vt' mode. Valid values are auto, pypdf, pymupdf.
         """
         self.provider = provider
         self.model_id = model_id

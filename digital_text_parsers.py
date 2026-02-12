@@ -42,13 +42,13 @@ class BaseDigitalTextParser(ABC):
         """
 
 
-class PyPDF2DigitalTextParser(BaseDigitalTextParser):
+class PypdfDigitalTextParser(BaseDigitalTextParser):
     """Digital text parser engine implemented with pypdf."""
 
     @property
     def parser_name(self) -> str:
         """Return short parser identifier."""
-        return "pypdf2"
+        return "pypdf"
 
     @classmethod
     def is_available(cls) -> bool:
@@ -125,7 +125,7 @@ def create_digital_text_parser(
     """Create a digital text parser implementation.
 
     Args:
-        parser_name: Requested parser name. Allowed values are `auto`, `pypdf2`,
+        parser_name: Requested parser name. Allowed values are `auto`, `pypdf`,
             and `pymupdf`.
 
     Returns:
@@ -137,17 +137,17 @@ def create_digital_text_parser(
             explicitly requested.
     """
     normalized = parser_name.lower().strip()
-    if normalized not in {"auto", "pypdf2", "pymupdf"}:
+    if normalized not in {"auto", "pypdf", "pymupdf"}:
         raise ValueError(
             "Invalid digital text parser "
-            f"'{parser_name}'. Valid options are auto, pypdf2, pymupdf."
+            f"'{parser_name}'. Valid options are auto, pypdf, pymupdf."
         )
 
     if normalized == "auto":
         if PyMuPDFDigitalTextParser.is_available():
             parser: BaseDigitalTextParser = PyMuPDFDigitalTextParser()
         else:
-            parser = PyPDF2DigitalTextParser()
+            parser = PypdfDigitalTextParser()
         return DigitalTextParserSelection(
             parser=parser,
             requested_parser=normalized,
@@ -159,11 +159,11 @@ def create_digital_text_parser(
             raise ValueError(
                 "PyMuPDF parser requested but dependency is not installed. "
                 "Install with `pip install pymupdf` or `pip install '.[pymupdf]'`, "
-                "or use `--digital-text-parser pypdf2`."
+                "or use `--digital-text-parser pypdf`."
             )
         parser = PyMuPDFDigitalTextParser()
     else:
-        parser = PyPDF2DigitalTextParser()
+        parser = PypdfDigitalTextParser()
 
     return DigitalTextParserSelection(
         parser=parser,
@@ -183,7 +183,7 @@ def get_available_digital_text_parsers() -> List[str]:
     Returns:
         Ordered list of available parser identifiers.
     """
-    parsers = ["pypdf2"]
+    parsers = ["pypdf"]
     if is_pymupdf_available():
         parsers.append("pymupdf")
     return parsers

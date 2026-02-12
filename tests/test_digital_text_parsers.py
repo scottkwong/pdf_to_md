@@ -33,10 +33,10 @@ def _assert_fixture_markers(page_texts: list[str]) -> None:
         assert f"FIXTURE_PAGE_{idx}" in page_text
 
 
-def test_pypdf2_extraction_on_generated_fixture() -> None:
-    """Validate PyPDF2 extraction against generated benchmark fixture."""
+def test_pypdf_extraction_on_generated_fixture() -> None:
+    """Validate pypdf extraction against generated benchmark fixture."""
     fixture_path = ensure_default_fixture_pdfs()[0]
-    parser = create_digital_text_parser("pypdf2").parser
+    parser = create_digital_text_parser("pypdf").parser
     pages = parser.extract_pages(fixture_path)
     assert len(pages) == 5
     _assert_fixture_markers(pages)
@@ -48,13 +48,13 @@ def test_auto_backend_resolution() -> None:
     if is_pymupdf_available():
         assert selection.resolved_parser == "pymupdf"
     else:
-        assert selection.resolved_parser == "pypdf2"
+        assert selection.resolved_parser == "pypdf"
 
 
 def test_available_backends_reported() -> None:
     """Validate available parser listing includes expected entries."""
     available = get_available_digital_text_parsers()
-    assert "pypdf2" in available
+    assert "pypdf" in available
     if is_pymupdf_available():
         assert "pymupdf" in available
 
@@ -76,7 +76,7 @@ def run_all_tests() -> bool:
     """Run parser correctness tests and return pass/fail status."""
     print("Running digital text parser correctness tests...\n")
     try:
-        test_pypdf2_extraction_on_generated_fixture()
+        test_pypdf_extraction_on_generated_fixture()
         test_auto_backend_resolution()
         if is_pymupdf_available():
             test_pymupdf_extraction_on_generated_fixture()

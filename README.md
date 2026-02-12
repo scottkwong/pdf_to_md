@@ -176,7 +176,7 @@ Convert PDF files to Markdown format using LLM vision models. It supports proces
 The PDF pipeline is:
 
 1. Extract per-page first-pass text with a digital text parser
-   (`pypdf2` or `pymupdf`).
+   (`pypdf` or `pymupdf`).
 2. If mode is `vt`, pass page image + first-pass text to the LLM provider.
 3. If mode is `v`, pass only the page image to the LLM provider.
 
@@ -203,7 +203,7 @@ To utilize additional options:
 - `--version`: Show version and exit.
 - `-o`, `--output_dir <output_directory>`: Destination for Markdown files. Defaults to PDF's location if unspecified.
 - `-m`, `--mode <mode>`: Sets processing mode. Choose 'v' for vision-only or 'vt' for vision-and-text (default: 'vt').
-- `--digital-text-parser <parser>`: Parser engine used for first-pass digital text parsing in `vt` mode. Options: `auto` (default), `pypdf2`, `pymupdf`.
+- `--digital-text-parser <parser>`: Parser engine used for first-pass digital text parsing in `vt` mode. Options: `auto` (default), `pypdf`, `pymupdf`.
 - `--model <model>`: Model identifier from `models.json` to use for both vision and text processing (default: `gpt-5.2`).
 - `--provider <provider>`: Force specific provider: `openrouter`, `openai`, `anthropic`, or `google` (optional).
 - `--prefer-direct`: Skip OpenRouter and use direct APIs only.
@@ -272,7 +272,7 @@ To utilize additional options:
 ./pdf_to_md.py document.pdf --extractor llamaparse --language de
 
 # Force pypdf digital text parser
-./pdf_to_md.py document.pdf --digital-text-parser pypdf2
+./pdf_to_md.py document.pdf --digital-text-parser pypdf
 
 # Run digital text parser benchmark against generated fixture PDFs (default path)
 ./pdf_to_md.py --benchmark-digital-text-parsers --benchmark-runs 10
@@ -292,7 +292,7 @@ documents where visual layout is important.
 When mode is `vt` (default), vision extraction includes first-pass text from a
 digital text parser:
 - `auto` (default): prefers PyMuPDF when installed, otherwise pypdf
-- `pypdf2`: forces pypdf backend
+- `pypdf`: forces pypdf backend
 - `pymupdf`: forces PyMuPDF backend (requires `pip install ".[pymupdf]"` or `pip install pymupdf`)
 
 **LlamaParse extraction:** Uses LlamaIndex's LlamaParse API for document-level
@@ -414,5 +414,5 @@ If installation fails due to architecture-specific wheel/build issues, use
 pypdf only:
 
 ```bash
-./pdf_to_md.py document.pdf --digital-text-parser pypdf2
+./pdf_to_md.py document.pdf --digital-text-parser pypdf
 ```

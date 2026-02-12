@@ -76,7 +76,7 @@ def create_extractor(
         model: Model identifier for vision extractor.
         mode: Processing mode for vision extractor ('v' or 'vt').
         digital_text_parser: Parser engine for first-pass digital text parsing
-            in vision+text mode. One of: auto, pypdf2, pymupdf.
+            in vision+text mode. One of: auto, pypdf, pymupdf.
         prefer_openrouter: Whether to prefer OpenRouter for vision extractor.
         llamaparse_tier: Processing tier for LlamaParse extractor.
         language: Document language for LlamaParse extractor.
@@ -207,6 +207,7 @@ def print_cli_configuration(args: argparse.Namespace, model: str) -> None:
     print("=" * 70)
     print("CLI Configuration:")
     print("=" * 70)
+    print(f"  Version:            {_get_version()}")
     print(f"  Target path:        {args.target_path}")
     print(f"  Output directory:   {args.output_dir or '(default: same as input)'}")
     print(f"  Extractor:          {args.extractor}")
@@ -554,7 +555,7 @@ def main() -> None:
     parser.add_argument(
         "--digital-text-parser",
         type=str,
-        choices=["auto", "pypdf2", "pymupdf"],
+        choices=["auto", "pypdf", "pymupdf"],
         default="auto",
         help="Parser engine for first-pass digital text parsing in mode 'vt'. "
         "Defaults to 'auto' (prefers PyMuPDF when installed).",
@@ -588,6 +589,8 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%H:%M:%S",
     )
+    # Quiet pypdf "Ignoring wrong pointing object" (benign PDF quirks)
+    logging.getLogger("pypdf").setLevel(logging.ERROR)
     # Set extractors logger to show errors by default, debug with -d
     extractors_logger = logging.getLogger("extractors")
     if args.debug:
