@@ -327,7 +327,7 @@ This will:
 - Run vision processing tests for each available provider
 - Provide a summary of results
 
-Tests use your `.env` file for API keys (no hardcoded values).
+Tests use your `.env` file for API keys.
 
 ### Digital text parser and setup tests (no LLM calls)
 
