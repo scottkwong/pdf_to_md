@@ -21,19 +21,19 @@ Choose your installer. Dependencies are defined in `pyproject.toml`; `requiremen
 Install so `pdf_to_md` is on PATH from any directory:
 
 ```bash
-pipx install git+https://github.com/scottkwong/pdf_to_md.git
+pipx install "pdf-to-md @ git+https://github.com/scottkwong/pdf_to_md.git"
 ```
 
 Optional: add the PyMuPDF parser for faster first-pass text extraction:
 
 ```bash
-pipx install "git+https://github.com/scottkwong/pdf_to_md.git[pymupdf]"
+pipx install "pdf-to-md[pymupdf] @ git+https://github.com/scottkwong/pdf_to_md.git"
 ```
 
 To install a specific version (requires a git tag, e.g. `v0.1.0`):
 
 ```bash
-pipx install git+https://github.com/scottkwong/pdf_to_md.git@v0.1.0
+pipx install "pdf-to-md @ git+https://github.com/scottkwong/pdf_to_md.git@v0.1.0"
 ```
 
 Alternatively, from a local clone:
