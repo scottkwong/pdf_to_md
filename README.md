@@ -305,9 +305,6 @@ LlamaParse tiers:
 - `agentic` - Balanced accuracy and speed (default)
 - `agentic_plus` - Maximum fidelity for complex layouts
 
-LlamaParse pricing: Free tier includes 1,000 pages/day. Paid plans offer
-7,000 pages/week + $0.003 per additional page.
-
 ### Provider Selection
 
 The tool automatically selects the best provider based on available API keys:
