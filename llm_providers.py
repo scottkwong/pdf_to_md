@@ -362,10 +362,8 @@ def load_models_config() -> Dict:
         FileNotFoundError: If models.json is not found.
         json.JSONDecodeError: If models.json is invalid JSON.
     """
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    models_path = os.path.join(script_dir, "models.json")
-    with open(models_path, "r") as f:
-        return json.load(f)
+    from models_config import load_models_config as _load
+    return _load()
 
 
 def validate_openrouter_key(api_key: str) -> bool:
