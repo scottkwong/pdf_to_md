@@ -310,43 +310,37 @@ class GoogleProvider(BaseProvider):
         if prior_text:
             full_prompt = f"{prompt}\n\n<prior_text>\n{prior_text}\n</prior_text>"
 
-        import base64
-
-        image_data = base64.b64decode(image_base64)
-
-        # Try to use the specified model, fallback to available models
-        # Note: gemini-3-pro and gemini-3-flash may not exist yet
-        # Use available models: gemini-1.5-pro, gemini-1.5-flash, or gemini-pro
-        # The new google.genai SDK uses Client with models.generate_content
+        # Try to use the specified model, fallback to available models.
+        # Fallbacks use current stable models (gemini-1.5-* deprecated).
+        # google.genai SDK: Client.models.generate_content with contents dict.
         model_to_try = model
-        try:
-            response = self.client.models.generate_content(
-                model=model_to_try,
-                contents=[
-                    {"role": "user", "parts": [
-                        {"text": full_prompt},
-                        {"inline_data": {"mime_type": "image/jpeg", "data": image_base64}}
-                    ]}
-                ],
-            )
-        except Exception:
-            # Fallback to available models
-            for fallback_model in ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-pro"]:
-                try:
-                    response = self.client.models.generate_content(
-                        model=fallback_model,
-                        contents=[
-                            {"role": "user", "parts": [
-                                {"text": full_prompt},
-                                {"inline_data": {"mime_type": "image/jpeg", "data": image_base64}}
-                            ]}
-                        ],
-                    )
-                    break
-                except Exception:
-                    continue
-            else:
-                raise ValueError("Could not use any available Google model")
+        last_error: Optional[Exception] = None
+        fallback_models = [
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-2.0-flash",
+            "gemini-2.5-flash-lite",
+        ]
+        for attempt_model in [model_to_try] + fallback_models:
+            try:
+                response = self.client.models.generate_content(
+                    model=attempt_model,
+                    contents=[
+                        {"role": "user", "parts": [
+                            {"text": full_prompt},
+                            {"inline_data": {"mime_type": "image/jpeg", "data": image_base64}}
+                        ]}
+                    ],
+                )
+                last_error = None
+                break
+            except Exception as e:
+                last_error = e
+                continue
+        if last_error is not None:
+            raise ValueError(
+                f"Could not use any available Google model. Last error: {last_error}"
+            ) from last_error
         
         # Extract text from response
         if hasattr(response, "text"):

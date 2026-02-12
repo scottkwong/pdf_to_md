@@ -113,7 +113,11 @@ def test_google_text():
             )
         except Exception:
             # Fallback to available models if gemini-3 doesn't exist
-            for fallback_model in ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-pro"]:
+            fallback_models = [
+                "gemini-2.5-flash", "gemini-2.5-pro",
+                "gemini-2.0-flash", "gemini-2.5-flash-lite",
+            ]
+            for fallback_model in fallback_models:
                 try:
                     response = provider.client.models.generate_content(
                         model=fallback_model,

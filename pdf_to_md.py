@@ -1,4 +1,4 @@
-#!/opt/homebrew/anaconda3/envs/pdf_to_md/bin/python
+#!/usr/bin/env python3
 """
 Converts a PDF file or folder to Markdown using LLM vision models.
 
@@ -13,6 +13,15 @@ import sys
 
 from dotenv import load_dotenv
 from typing import Optional, Tuple, TYPE_CHECKING
+
+
+def _get_version() -> str:
+    """Return package version from metadata, or 0.0.0.dev if not installed."""
+    try:
+        from importlib.metadata import version
+        return version("pdf-to-md")
+    except Exception:  # pragma: no cover
+        return "0.0.0.dev"
 
 if TYPE_CHECKING:
     from llm_providers import BaseProvider
@@ -52,6 +61,7 @@ def create_extractor(
     extractor_type: str,
     model: str = "gpt-5.2",
     mode: str = "vt",
+    digital_text_parser: str = "auto",
     prefer_openrouter: bool = True,
     llamaparse_tier: str = "agentic",
     language: str = "en",
@@ -65,6 +75,8 @@ def create_extractor(
         extractor_type: Type of extractor ('vision' or 'llamaparse').
         model: Model identifier for vision extractor.
         mode: Processing mode for vision extractor ('v' or 'vt').
+        digital_text_parser: Parser engine for first-pass digital text parsing
+            in vision+text mode. One of: auto, pypdf, pymupdf.
         prefer_openrouter: Whether to prefer OpenRouter for vision extractor.
         llamaparse_tier: Processing tier for LlamaParse extractor.
         language: Document language for LlamaParse extractor.
@@ -90,6 +102,7 @@ def create_extractor(
             model_id=model_id,
             mode=mode,
             max_parallel_pages=max_parallel_pages,
+            digital_text_parser=digital_text_parser,
         )
 
 
@@ -194,6 +207,7 @@ def print_cli_configuration(args: argparse.Namespace, model: str) -> None:
     print("=" * 70)
     print("CLI Configuration:")
     print("=" * 70)
+    print(f"  Version:            {_get_version()}")
     print(f"  Target path:        {args.target_path}")
     print(f"  Output directory:   {args.output_dir or '(default: same as input)'}")
     print(f"  Extractor:          {args.extractor}")
@@ -202,10 +216,16 @@ def print_cli_configuration(args: argparse.Namespace, model: str) -> None:
         print(f"  Language:           {args.language}")
     else:
         print(f"  Mode:               {args.mode}")
+        print(f"  Digital parser:     {args.digital_text_parser}")
         print(f"  Model:              {model}")
         print(f"  Provider override:  {args.provider or '(none - auto-detect)'}")
         print(f"  Prefer OpenRouter:  {not args.prefer_direct}")
         print(f"  Parallel pages:     {args.parallel}")
+    if args.benchmark_digital_text_parsers:
+        benchmark_target = args.benchmark_pdf or "(default generated fixtures)"
+        print(f"  Benchmark mode:     {args.benchmark_digital_text_parsers}")
+        print(f"  Benchmark runs:     {args.benchmark_runs}")
+        print(f"  Benchmark target:   {benchmark_target}")
     print(f"  Verbose:            {args.verbose}")
     print(f"  Debug:              {args.debug}")
     print(f"  Recursive:          {args.recursive}")
@@ -261,6 +281,34 @@ def print_model_resolution(
         print(f"  ✗ Error resolving model: {e}")
         sys.exit(1)
     
+    print("=" * 70)
+    print()
+
+
+def print_digital_text_parser_resolution(requested_parser: str) -> None:
+    """Print requested and resolved digital text parser details.
+
+    Args:
+        requested_parser: Parser requested from CLI configuration.
+    """
+    from digital_text_parsers import (
+        create_digital_text_parser,
+        get_available_digital_text_parsers,
+    )
+
+    try:
+        selection = create_digital_text_parser(requested_parser)
+    except ValueError as error:
+        print(f"Error: {error}")
+        sys.exit(1)
+
+    available_parsers = ", ".join(get_available_digital_text_parsers())
+    print("=" * 70)
+    print("Digital Text Parser Resolution:")
+    print("=" * 70)
+    print(f"  Requested parser: {selection.requested_parser}")
+    print(f"  Resolved parser:  {selection.resolved_parser}")
+    print(f"  Available:        {available_parsers}")
     print("=" * 70)
     print()
 
@@ -384,7 +432,8 @@ def validate_directory_path(dir_path: str) -> None:
         sys.exit(1)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """CLI entry point: parse arguments and run the PDF-to-Markdown pipeline."""
     parser = argparse.ArgumentParser(
         description="Convert a PDF to a Markdown file using LLM vision models."
     )
@@ -399,6 +448,11 @@ if __name__ == "__main__":
         "--list-models",
         action="store_true",
         help="List all available models and show the default, then exit.",
+    )
+    parser.add_argument(
+        "--version",
+        action="store_true",
+        help="Show version and exit.",
     )
     parser.add_argument(
         "-o",
@@ -498,6 +552,35 @@ if __name__ == "__main__":
         default=False,
         help="Enable debug logging for page processing order.",
     )
+    parser.add_argument(
+        "--digital-text-parser",
+        type=str,
+        choices=["auto", "pypdf", "pymupdf"],
+        default="auto",
+        help="Parser engine for first-pass digital text parsing in mode 'vt'. "
+        "Defaults to 'auto' (prefers PyMuPDF when installed).",
+    )
+    parser.add_argument(
+        "--benchmark-digital-text-parsers",
+        action="store_true",
+        default=False,
+        help="Run a non-LLM benchmark that compares digital text parser "
+        "engines (pypdf vs PyMuPDF) and exit.",
+    )
+    parser.add_argument(
+        "--benchmark-runs",
+        type=int,
+        default=10,
+        help="Number of extraction runs per backend when benchmark mode is "
+        "enabled (default: 10).",
+    )
+    parser.add_argument(
+        "--benchmark-pdf",
+        type=str,
+        default=None,
+        help="Optional PDF path override for benchmark mode. If omitted, "
+        "generated fixture PDFs are used.",
+    )
     args = parser.parse_args()
 
     # Configure logging - always show errors, debug only with -d flag
@@ -506,6 +589,8 @@ if __name__ == "__main__":
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%H:%M:%S",
     )
+    # Quiet pypdf "Ignoring wrong pointing object" (benign PDF quirks)
+    logging.getLogger("pypdf").setLevel(logging.ERROR)
     # Set extractors logger to show errors by default, debug with -d
     extractors_logger = logging.getLogger("extractors")
     if args.debug:
@@ -513,13 +598,16 @@ if __name__ == "__main__":
     else:
         extractors_logger.setLevel(logging.ERROR)
     
-    # Handle --list-models flag (before importing llm_providers)
+    # Handle --list-models and --version (before heavy imports)
     if args.list_models:
         list_available_models()
         sys.exit(0)
-    
+    if args.version:
+        print(f"pdf_to_md {_get_version()}")
+        sys.exit(0)
+
     # Require target_path if not listing models
-    if not args.target_path:
+    if not args.target_path and not args.benchmark_digital_text_parsers:
         parser.error("target_path is required unless using --list-models")
 
     # Extract configuration from args
@@ -528,6 +616,21 @@ if __name__ == "__main__":
 
     # Print configuration
     print_cli_configuration(args, model)
+
+    if args.extractor == "vision":
+        print_digital_text_parser_resolution(args.digital_text_parser)
+
+    if args.benchmark_digital_text_parsers:
+        from benchmark_digital_text_parsers import (
+            benchmark_digital_text_parsers,
+            print_benchmark_report,
+        )
+        summary = benchmark_digital_text_parsers(
+            runs=args.benchmark_runs,
+            pdf_path=args.benchmark_pdf,
+        )
+        print_benchmark_report(summary)
+        sys.exit(0)
 
     # Create extractor and handle model resolution
     extractor = None
@@ -557,6 +660,7 @@ if __name__ == "__main__":
             extractor_type="vision",
             model=model,
             mode=args.mode,
+            digital_text_parser=args.digital_text_parser,
             prefer_openrouter=prefer_openrouter,
             verbose=args.verbose,
             max_parallel_pages=args.parallel,
@@ -590,3 +694,7 @@ if __name__ == "__main__":
             extractor,
             args.verbose,
         )
+
+
+if __name__ == "__main__":
+    main()

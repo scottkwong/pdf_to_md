@@ -7,25 +7,83 @@ This tool converts PDF documents to Markdown files using LLM vision models. It s
 
 Before you begin, ensure you have the following installed:
 - Python 3.9 or higher
-- Pip (Python package installer)
 - At least one API key from the supported providers (see [API Keys](#api-keys))
+- **poppler-utils** (for PDF-to-image conversion). See [Additional Dependencies](#additional-dependencies) for install commands.
 
 ## Installation
 
-Clone the repository to your local machine:
+Choose your installer. Dependencies are defined in `pyproject.toml`; `requirements.txt` is a legacy fallback.
+
+**Quick start (optional):** From a clone, run `./bootstrap.sh` to create `.venv` and install deps, then `source .venv/bin/activate` and `./pdf_to_md.py --help`.
+
+### pipx (recommended for system-wide CLI)
+
+Install so `pdf_to_md` is on PATH from any directory:
 
 ```bash
-git clone https://github.com/scottkwong/pdf-to-md.git
+pipx install git+https://github.com/scottkwong/pdf_to_md.git
+```
+
+Optional: add the PyMuPDF parser for faster first-pass text extraction:
+
+```bash
+pipx install "git+https://github.com/scottkwong/pdf_to_md.git[pymupdf]"
+```
+
+To install a specific version (requires a git tag, e.g. `v0.1.0`):
+
+```bash
+pipx install git+https://github.com/scottkwong/pdf_to_md.git@v0.1.0
+```
+
+Alternatively, from a local clone:
+
+```bash
 cd pdf_to_md
+pipx install .
 ```
 
-Install the required dependencies:
+Verify:
 
 ```bash
-pip install -r requirements.txt
+pdf_to_md --version
 ```
 
-If you don't have `poppler` installed, see [Additional Dependencies](#additional-dependencies).
+### uv (for development / clone-and-run)
+
+```bash
+git clone https://github.com/scottkwong/pdf_to_md.git
+cd pdf_to_md
+uv venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+uv pip install -e .
+# Optional: uv pip install -e ".[pymupdf]"
+```
+
+### pip
+
+```bash
+git clone https://github.com/scottkwong/pdf_to_md.git
+cd pdf_to_md
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install .
+# Optional: pip install ".[pymupdf]"
+```
+
+If PyMuPDF fails to install on your platform, skip it; the app falls back to pypdf with `--digital-text-parser auto`.
+
+### Conda
+
+```bash
+conda create -n pdf_to_md python=3.9
+conda activate pdf_to_md
+cd pdf_to_md
+pip install .
+# Optional: pip install ".[pymupdf]"
+```
+
+Project dependencies are defined in `pyproject.toml` and installed via pip; Conda is for Python/runtime only.
+
+If you don't have **poppler** installed, see [Additional Dependencies](#additional-dependencies).
 
 ### API Keys
 
@@ -83,80 +141,44 @@ fallback to direct provider APIs. If your requested model is unavailable,
 you'll be prompted to select from available alternatives.
 
 
-## Virtual Environment Setup (Recommended)
+## Virtual environment (venv or Conda)
 
-It's recommended to use a Conda environment to manage dependencies for this project.
+For development or clone-and-run, use a virtual environment in the repo (e.g. `.venv`) or a Conda env. Activate it before running the script or installing dependencies. If you use `.venv`, Cursor can pick it automatically via `.vscode/settings.json`.
 
-### Creating the Conda Environment
+**Configuring Cursor/VS Code:** Use **Python: Select Interpreter** (`Cmd+Shift+P` / `Ctrl+Shift+P`) and choose the interpreter of the environment you use (e.g. `.venv/bin/python` or your Conda env’s `python`). The bottom-right corner shows the active interpreter.
 
-Create a new Conda environment named `pdf_to_md` with Python 3.9 or higher:
+## Running the tool
 
-```bash
-conda create -n pdf_to_md python=3.9
-```
-
-**Note:** Python 3.9+ is required for the `anthropic` and `google-genai` packages.
-
-### Activating the Environment
-
-Before running the script or installing dependencies, activate the environment:
+**From the project directory:** Activate your environment, then run:
 
 ```bash
-conda activate pdf_to_md
+./pdf_to_md.py <path_to_pdf>
+# or
+python pdf_to_md.py <path_to_pdf>
+# or (if installed in the env)
+python -m pdf_to_md <path_to_pdf>
 ```
 
-Once activated, install the required packages:
+**From another folder (global command):** Prefer **pipx install from Git** (see [pipx](#pipx-recommended-for-system-wide-cli) above) so `pdf_to_md` is on PATH everywhere. Check which version is running with `pdf_to_md --version`.
+
+If you don’t use pipx, you can use a small wrapper script that invokes the repo’s environment: create a script (e.g. `~/bin/pdf_to_md`) that runs:
 
 ```bash
-pip install -r requirements.txt
+exec "/absolute/path/to/pdf_to_md/.venv/bin/python" "/absolute/path/to/pdf_to_md/pdf_to_md.py" "$@"
 ```
 
-### Deactivating the Environment
-
-When you're done working with the script, you can deactivate the environment:
-
-```bash
-conda deactivate
-```
-
-### Checking Active Environment
-
-To verify which environment is currently active:
-
-```bash
-conda env list
-```
-
-The active environment will be marked with an asterisk (*).
-
-### Configuring Cursor/VS Code
-
-To ensure Cursor uses the correct Conda environment for linting and
-IntelliSense:
-
-1. **Automatic (recommended):** A `.vscode/settings.json` file is included
-   that points to the `pdf_to_md` Conda environment.
-
-2. **Manual selection:** 
-   - Press `Cmd+Shift+P` (or `Ctrl+Shift+P` on Windows/Linux)
-   - Type "Python: Select Interpreter"
-   - Choose `/opt/homebrew/anaconda3/envs/pdf_to_md/bin/python`
-
-3. **Verify:** Check the bottom-right corner of Cursor to confirm it shows
-   "3.x.x ('pdf_to_md')"
-
-If you installed Anaconda in a different location, update the path in
-`.vscode/settings.json` accordingly.
-
-
-## Script Configuration
-
-Before running `pdf_to_md.py`, ensure the shebang line (first line in the file) points to your Python interpreter. If needed, replace `#!/opt/homebrew/anaconda3/envs/pdf_to_md/bin/python` with the path to your Python executable, which you can find with `which python` or `which python3` in your terminal.
-
+Then `chmod +x ~/bin/pdf_to_md` and ensure that directory is in your `PATH`. You can pass any PDF path, e.g. `pdf_to_md ~/Documents/foo.pdf`.
 
 ## Usage
 
 Convert PDF files to Markdown format using LLM vision models. It supports processing a single file or multiple files within a directory, optionally in parallel. The script provides several options including model selection, provider choice, output directory specification, processing modes, verbosity, and recursive directory processing.
+
+The PDF pipeline is:
+
+1. Extract per-page first-pass text with a digital text parser
+   (`pypdf` or `pymupdf`).
+2. If mode is `vt`, pass page image + first-pass text to the LLM provider.
+3. If mode is `v`, pass only the page image to the LLM provider.
 
 ### Basic Usage
 
@@ -178,8 +200,10 @@ To utilize additional options:
 
 - `<path_to_pdf>`: Path to the PDF file or directory containing PDF files.
 - `--list-models`: List all available models and show the default, then exit.
+- `--version`: Show version and exit.
 - `-o`, `--output_dir <output_directory>`: Destination for Markdown files. Defaults to PDF's location if unspecified.
 - `-m`, `--mode <mode>`: Sets processing mode. Choose 'v' for vision-only or 'vt' for vision-and-text (default: 'vt').
+- `--digital-text-parser <parser>`: Parser engine used for first-pass digital text parsing in `vt` mode. Options: `auto` (default), `pypdf`, `pymupdf`.
 - `--model <model>`: Model identifier from `models.json` to use for both vision and text processing (default: `gpt-5.2`).
 - `--provider <provider>`: Force specific provider: `openrouter`, `openai`, `anthropic`, or `google` (optional).
 - `--prefer-direct`: Skip OpenRouter and use direct APIs only.
@@ -191,6 +215,9 @@ To utilize additional options:
 - `--extractor <extractor>`: Extraction method: `vision` (default, LLM-based) or `llamaparse` (LlamaCloud API).
 - `--llamaparse-tier <tier>`: LlamaParse processing tier (only with `--extractor llamaparse`): `fast`, `cost_effective`, `agentic` (default), `agentic_plus`.
 - `--language <lang>`: Document language code for LlamaParse (default: `en`).
+- `--benchmark-digital-text-parsers`: Run a direct package benchmark (no LLM calls) comparing pypdf and PyMuPDF digital text parsers, then exit.
+- `--benchmark-runs <N>`: Number of benchmark runs per parser (default: `10`).
+- `--benchmark-pdf <path>`: Optional PDF override for benchmark mode. If omitted, benchmark uses generated fixture PDFs from `tests/fixtures`.
 
 **Available Models** (defined in `models.json`):
 - `gpt-5.2` - OpenAI GPT-5.2 (default)
@@ -243,6 +270,15 @@ To utilize additional options:
 
 # Use LlamaParse for non-English documents
 ./pdf_to_md.py document.pdf --extractor llamaparse --language de
+
+# Force pypdf digital text parser
+./pdf_to_md.py document.pdf --digital-text-parser pypdf
+
+# Run digital text parser benchmark against generated fixture PDFs (default path)
+./pdf_to_md.py --benchmark-digital-text-parsers --benchmark-runs 10
+
+# Run digital text parser benchmark against a specific PDF
+./pdf_to_md.py --benchmark-digital-text-parsers --benchmark-pdf document.pdf
 ```
 
 ### Extraction Methods
@@ -253,6 +289,12 @@ The tool supports two extraction methods:
 vision-capable LLMs (GPT-4, Claude, Gemini) to interpret each page. Best for
 documents where visual layout is important.
 
+When mode is `vt` (default), vision extraction includes first-pass text from a
+digital text parser:
+- `auto` (default): prefers PyMuPDF when installed, otherwise pypdf
+- `pypdf`: forces pypdf backend
+- `pymupdf`: forces PyMuPDF backend (requires `pip install ".[pymupdf]"` or `pip install pymupdf`)
+
 **LlamaParse extraction:** Uses LlamaIndex's LlamaParse API for document-level
 extraction. Optimized for structured documents like financial reports and
 scientific papers. Requires `LLAMA_CLOUD_API_KEY`.
@@ -262,9 +304,6 @@ LlamaParse tiers:
 - `cost_effective` - Budget-friendly for standard documents
 - `agentic` - Balanced accuracy and speed (default)
 - `agentic_plus` - Maximum fidelity for complex layouts
-
-LlamaParse pricing: Free tier includes 1,000 pages/day. Paid plans offer
-7,000 pages/week + $0.003 per additional page.
 
 ### Provider Selection
 
@@ -290,6 +329,28 @@ This will:
 
 Tests use your `.env` file for API keys (no hardcoded values).
 
+### Digital text parser and setup tests (no LLM calls)
+
+These tests validate direct parser correctness and installation behavior:
+
+```bash
+python -m pytest tests/test_digital_text_parsers.py
+python -m pytest tests/test_installation_setup.py
+python -m pytest tests/test_benchmark_digital_text_parsers.py
+```
+
+### Digital text parser benchmark
+
+Benchmark direct package extraction with mean and standard deviation:
+
+```bash
+# Default: generated fixture PDFs in tests/fixtures
+python pdf_to_md.py --benchmark-digital-text-parsers --benchmark-runs 10
+
+# Override input PDF
+python pdf_to_md.py --benchmark-digital-text-parsers --benchmark-pdf path/to/file.pdf
+```
+
 
 ## License
 
@@ -298,7 +359,7 @@ This project is open source and available under the [MIT License](LICENSE.txt).
 
 ## Additional Dependencies
 
-Aside from the Python packages listed in `requirements.txt`, this project requires `poppler-utils` to be installed on your system. `poppler-utils` includes utilities like `pdftoppm` which are essential for PDF processing.
+Aside from the Python packages in `pyproject.toml` (or `requirements.txt`), this project requires `poppler-utils` to be installed on your system. `poppler-utils` includes utilities like `pdftoppm` which are essential for PDF processing.
 
 ### Installing poppler-utils
 
@@ -329,3 +390,26 @@ pdftoppm -v
 ```
 
 This command should return the version of `pdftoppm` if `poppler-utils` is installed correctly.
+
+### Optional: PyMuPDF
+
+PyMuPDF is optional and can be used as the first-pass digital text parser. Install via the extra (from the project directory) or standalone:
+
+```bash
+pip install ".[pymupdf]"
+# or: pip install pymupdf
+# or with uv: uv pip install -e ".[pymupdf]"
+```
+
+Verification:
+
+```bash
+python -c "import fitz; print(fitz.__doc__.splitlines()[0])"
+```
+
+If installation fails due to architecture-specific wheel/build issues, use
+pypdf only:
+
+```bash
+./pdf_to_md.py document.pdf --digital-text-parser pypdf
+```

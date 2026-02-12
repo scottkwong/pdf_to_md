@@ -1,10 +1,9 @@
 """
 Tests for parallel page processing functionality.
 
-Tests the VisionExtractor parallel processing and CLI argument changes
-without requiring actual API keys or external dependencies.
+Tests the VisionExtractor parallel processing without requiring actual
+API keys or external dependencies.
 """
-import argparse
 import os
 import sys
 from typing import Optional
@@ -148,78 +147,6 @@ class TestParallelPageProcessing:
             result = extractor.extract("/fake/path.pdf", "/fake/output", verbose=False)
 
         assert result.metadata["max_parallel_pages"] == 7
-
-
-class TestCLIArguments:
-    """Tests for CLI argument parsing."""
-
-    def test_parallel_default_value(self):
-        """Test that -p defaults to 10."""
-        parser = argparse.ArgumentParser()
-        parser.add_argument(
-            "-p", "--parallel",
-            type=int,
-            nargs="?",
-            const=10,
-            default=10,
-        )
-        
-        # No -p flag
-        args = parser.parse_args([])
-        assert args.parallel == 10
-
-    def test_parallel_with_no_value(self):
-        """Test that -p without value uses const (10)."""
-        parser = argparse.ArgumentParser()
-        parser.add_argument(
-            "-p", "--parallel",
-            type=int,
-            nargs="?",
-            const=10,
-            default=10,
-        )
-        
-        # -p flag without value
-        args = parser.parse_args(["-p"])
-        assert args.parallel == 10
-
-    def test_parallel_with_custom_value(self):
-        """Test that -p 5 sets parallel to 5."""
-        parser = argparse.ArgumentParser()
-        parser.add_argument(
-            "-p", "--parallel",
-            type=int,
-            nargs="?",
-            const=10,
-            default=10,
-        )
-        
-        args = parser.parse_args(["-p", "5"])
-        assert args.parallel == 5
-
-    def test_single_flag_default_false(self):
-        """Test that -s defaults to False."""
-        parser = argparse.ArgumentParser()
-        parser.add_argument(
-            "-s", "--single",
-            action="store_true",
-            default=False,
-        )
-        
-        args = parser.parse_args([])
-        assert args.single is False
-
-    def test_single_flag_when_set(self):
-        """Test that -s sets single to True."""
-        parser = argparse.ArgumentParser()
-        parser.add_argument(
-            "-s", "--single",
-            action="store_true",
-            default=False,
-        )
-        
-        args = parser.parse_args(["-s"])
-        assert args.single is True
 
 
 class TestIntegrationWithRealPDF:
