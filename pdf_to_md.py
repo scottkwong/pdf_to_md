@@ -140,18 +140,15 @@ def pdf_to_markdown_with_extractor(
 def list_available_models() -> None:
     """
     List all available models from models.json and display them.
-    
+
     Exits the program after displaying the models.
     """
     import json
-    
-    # Load models.json directly
-    models_file = os.path.join(os.path.dirname(__file__), "models.json")
     try:
-        with open(models_file, "r") as f:
-            models_config = json.load(f)
-    except FileNotFoundError:
-        print(f"Error: models.json not found at {models_file}")
+        from models_config import load_models_config
+        models_config = load_models_config()
+    except FileNotFoundError as e:
+        print(f"Error: models.json not found: {e}")
         sys.exit(1)
     except json.JSONDecodeError as e:
         print(f"Error: Invalid JSON in models.json: {e}")

@@ -34,6 +34,7 @@ pdf_to_md = "pdf_to_md:main"
 where = ["."]
 
 [tool.setuptools]
+data-files = { "share/pdf-to-md" = ["models.json"] }
 py-modules = [
     "pdf_to_md",
     "extractors",
@@ -41,4 +42,6 @@ py-modules = [
     "digital_text_parsers",
     "llamaparse_extractor",
     "benchmark_digital_text_parsers",
+    "models_config",
 ]
+
