@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List
 
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 
 
 class BaseDigitalTextParser(ABC):
@@ -43,7 +43,7 @@ class BaseDigitalTextParser(ABC):
 
 
 class PyPDF2DigitalTextParser(BaseDigitalTextParser):
-    """Digital text parser engine implemented with PyPDF2."""
+    """Digital text parser engine implemented with pypdf."""
 
     @property
     def parser_name(self) -> str:
@@ -56,7 +56,7 @@ class PyPDF2DigitalTextParser(BaseDigitalTextParser):
         return True
 
     def extract_pages(self, pdf_path: str) -> List[str]:
-        """Extract text for each page using PyPDF2.
+        """Extract text for each page using pypdf.
 
         Args:
             pdf_path: Path to the PDF file.

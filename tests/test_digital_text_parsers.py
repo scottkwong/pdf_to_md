@@ -1,7 +1,7 @@
 """
 Correctness tests for digital PDF text parser engines.
 
-This suite validates direct package extraction with PyPDF2 and optional
+This suite validates direct package extraction with pypdf and optional
 PyMuPDF using deterministic fixture PDFs. It also verifies parser auto-
 selection behavior for environments with or without PyMuPDF installed.
 """
@@ -87,7 +87,7 @@ def run_all_tests() -> bool:
         print("\n" + "=" * 50)
         print("Digital Text Parser Test Summary:")
         print("=" * 50)
-        print("PyPDF2: PASSED")
+        print("pypdf: PASSED")
         print(f"PyMuPDF: {pymupdf_status}")
         return True
     except Exception as exc:

@@ -25,7 +25,7 @@ fi
 if pip install ".[pymupdf]" 2>/dev/null; then
   echo "Optional pymupdf installed."
 else
-  echo "Optional pymupdf not installed (ok; app will use PyPDF2 fallback)."
+  echo "Optional pymupdf not installed (ok; app will use pypdf fallback)."
 fi
 
 if ! command -v pdftoppm &>/dev/null; then

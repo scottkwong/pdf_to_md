@@ -16,7 +16,7 @@ dependencies = [
     "pdf2image",
     "Pillow",
     "pycryptodome==3.14.1",
-    "PyPDF2",
+    "pypdf",
     "python-dotenv",
     "reportlab",
     "tenacity",

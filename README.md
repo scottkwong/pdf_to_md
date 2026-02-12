@@ -69,7 +69,7 @@ pip install .
 # Optional: pip install ".[pymupdf]"
 ```
 
-If PyMuPDF fails to install on your platform, skip it; the app falls back to PyPDF2 with `--digital-text-parser auto`.
+If PyMuPDF fails to install on your platform, skip it; the app falls back to pypdf with `--digital-text-parser auto`.
 
 ### Conda
 
@@ -215,7 +215,7 @@ To utilize additional options:
 - `--extractor <extractor>`: Extraction method: `vision` (default, LLM-based) or `llamaparse` (LlamaCloud API).
 - `--llamaparse-tier <tier>`: LlamaParse processing tier (only with `--extractor llamaparse`): `fast`, `cost_effective`, `agentic` (default), `agentic_plus`.
 - `--language <lang>`: Document language code for LlamaParse (default: `en`).
-- `--benchmark-digital-text-parsers`: Run a direct package benchmark (no LLM calls) comparing PyPDF2 and PyMuPDF digital text parsers, then exit.
+- `--benchmark-digital-text-parsers`: Run a direct package benchmark (no LLM calls) comparing pypdf and PyMuPDF digital text parsers, then exit.
 - `--benchmark-runs <N>`: Number of benchmark runs per parser (default: `10`).
 - `--benchmark-pdf <path>`: Optional PDF override for benchmark mode. If omitted, benchmark uses generated fixture PDFs from `tests/fixtures`.
 
@@ -271,7 +271,7 @@ To utilize additional options:
 # Use LlamaParse for non-English documents
 ./pdf_to_md.py document.pdf --extractor llamaparse --language de
 
-# Force PyPDF2 digital text parser
+# Force pypdf digital text parser
 ./pdf_to_md.py document.pdf --digital-text-parser pypdf2
 
 # Run digital text parser benchmark against generated fixture PDFs (default path)
@@ -291,8 +291,8 @@ documents where visual layout is important.
 
 When mode is `vt` (default), vision extraction includes first-pass text from a
 digital text parser:
-- `auto` (default): prefers PyMuPDF when installed, otherwise PyPDF2
-- `pypdf2`: forces PyPDF2 backend
+- `auto` (default): prefers PyMuPDF when installed, otherwise pypdf
+- `pypdf2`: forces pypdf backend
 - `pymupdf`: forces PyMuPDF backend (requires `pip install ".[pymupdf]"` or `pip install pymupdf`)
 
 **LlamaParse extraction:** Uses LlamaIndex's LlamaParse API for document-level
@@ -411,7 +411,7 @@ python -c "import fitz; print(fitz.__doc__.splitlines()[0])"
 ```
 
 If installation fails due to architecture-specific wheel/build issues, use
-PyPDF2 only:
+pypdf only:
 
 ```bash
 ./pdf_to_md.py document.pdf --digital-text-parser pypdf2

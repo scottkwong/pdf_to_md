@@ -564,7 +564,7 @@ def main() -> None:
         action="store_true",
         default=False,
         help="Run a non-LLM benchmark that compares digital text parser "
-        "engines (PyPDF2 vs PyMuPDF) and exit.",
+        "engines (pypdf vs PyMuPDF) and exit.",
     )
     parser.add_argument(
         "--benchmark-runs",

@@ -19,7 +19,7 @@ from digital_text_parsers import is_pymupdf_available
 
 
 REQUIRED_IMPORTS = [
-    "PyPDF2",
+    "pypdf",
     "pdf2image",
     "PIL",
     "dotenv",
