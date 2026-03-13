@@ -20,6 +20,7 @@ from llm_providers import (
     GoogleProvider,
     OpenAIProvider,
     OpenRouterProvider,
+    VisionResult,
     create_provider,
     get_available_providers,
 )
@@ -75,8 +76,10 @@ def test_openrouter_vision():
             max_tokens=200,
         )
 
-        assert result is not None and len(result) > 0
-        assert "test" in result.lower() or "document" in result.lower()
+        assert isinstance(result, VisionResult)
+        assert result.text is not None and len(result.text) > 0
+        assert "test" in result.text.lower() or "document" in result.text.lower()
+        assert result.usage.input_tokens > 0
         print("✓ OpenRouter vision test passed")
         return True
     except Exception as e:
@@ -101,8 +104,10 @@ def test_openai_vision():
             max_tokens=200,
         )
 
-        assert result is not None and len(result) > 0
-        assert "test" in result.lower() or "document" in result.lower()
+        assert isinstance(result, VisionResult)
+        assert result.text is not None and len(result.text) > 0
+        assert "test" in result.text.lower() or "document" in result.text.lower()
+        assert result.usage.input_tokens > 0
         print("✓ OpenAI vision test passed")
         return True
     except Exception as e:
@@ -129,8 +134,10 @@ def test_anthropic_vision():
             max_tokens=200,
         )
 
-        assert result is not None and len(result) > 0
-        assert "test" in result.lower() or "document" in result.lower()
+        assert isinstance(result, VisionResult)
+        assert result.text is not None and len(result.text) > 0
+        assert "test" in result.text.lower() or "document" in result.text.lower()
+        assert result.usage.input_tokens > 0
         print("✓ Anthropic vision test passed")
         return True
     except Exception as e:
@@ -159,8 +166,10 @@ def test_google_vision():
             max_tokens=200,
         )
 
-        assert result is not None and len(result) > 0
-        assert "test" in result.lower() or "document" in result.lower()
+        assert isinstance(result, VisionResult)
+        assert result.text is not None and len(result.text) > 0
+        assert "test" in result.text.lower() or "document" in result.text.lower()
+        assert result.usage.input_tokens > 0
         print("✓ Google vision test passed")
         return True
     except Exception as e:

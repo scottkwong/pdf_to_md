@@ -134,6 +134,22 @@ def pdf_to_markdown_with_extractor(
     with open(output_file_path, 'w') as file:
         file.write(result.markdown)
 
+    # Print LLM cost summary if available
+    meta = result.metadata or {}
+    total_input = meta.get("total_input_tokens", 0)
+    total_output = meta.get("total_output_tokens", 0)
+    total_cost = meta.get("total_cost_usd", 0.0)
+
+    if total_input or total_output:
+        print(f"\nLLM Cost Summary:")
+        print(f"  Model:         {meta.get('model', 'unknown')}")
+        print(f"  Input tokens:  {total_input:,}")
+        print(f"  Output tokens: {total_output:,}")
+        if total_cost > 0:
+            print(f"  Total cost:    ${total_cost:.4f}")
+        else:
+            print(f"  Total cost:    (pricing unavailable)")
+
     return output_file_path
 
 

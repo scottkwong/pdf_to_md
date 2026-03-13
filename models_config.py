@@ -20,16 +20,16 @@ def _find_models_path() -> str:
     """
     import sys
 
-    # Installed: models.json is in share/pdf-to-md/ (data-files)
-    installed = os.path.join(sys.prefix, "share", "pdf-to-md", "models.json")
-    if os.path.exists(installed):
-        return installed
-
-    # Dev: models.json is in repo root (next to this module)
+    # Dev: models.json next to this module (always wins for local edits)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     candidate = os.path.join(script_dir, "models.json")
     if os.path.exists(candidate):
         return candidate
+
+    # Installed: models.json is in share/pdf-to-md/ (data-files)
+    installed = os.path.join(sys.prefix, "share", "pdf-to-md", "models.json")
+    if os.path.exists(installed):
+        return installed
 
     raise FileNotFoundError("models.json not found")
 

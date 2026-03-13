@@ -10,6 +10,7 @@ All providers support vision processing with base64-encoded images.
 import json
 import os
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from anthropic import Anthropic
@@ -19,6 +20,22 @@ import google.genai as genai
 
 # Load environment variables
 load_dotenv()
+
+
+@dataclass
+class TokenUsage:
+    """Token usage from an LLM API call."""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float | None = None  # Set by provider when API returns actual cost
+
+
+@dataclass
+class VisionResult:
+    """Result from a vision processing call."""
+    text: str
+    usage: TokenUsage = field(default_factory=TokenUsage)
+
 
 class BaseProvider(ABC):
     """Abstract base class for LLM providers."""
@@ -31,7 +48,7 @@ class BaseProvider(ABC):
         prior_text: Optional[str] = None,
         model: str = "",
         max_tokens: int = 4096,
-    ) -> str:
+    ) -> VisionResult:
         """
         Process an image with vision model.
 
@@ -43,7 +60,7 @@ class BaseProvider(ABC):
             max_tokens: Maximum tokens in response.
 
         Returns:
-            Generated text response.
+            VisionResult with text and token usage.
         """
         pass
 
@@ -73,7 +90,7 @@ class OpenRouterProvider(BaseProvider):
         prior_text: Optional[str] = None,
         model: str = "",
         max_tokens: int = 4096,
-    ) -> str:
+    ) -> VisionResult:
         """
         Process image using OpenRouter API.
 
@@ -85,7 +102,7 @@ class OpenRouterProvider(BaseProvider):
             max_tokens: Maximum tokens in response.
 
         Returns:
-            Generated text response.
+            VisionResult with text and token usage.
         """
         if not model:
             raise ValueError("Model must be specified for OpenRouter")
@@ -121,7 +138,20 @@ class OpenRouterProvider(BaseProvider):
             create_kwargs.pop("max_completion_tokens", None)
             create_kwargs["max_tokens"] = max_tokens
             response = self.client.chat.completions.create(**create_kwargs)
-        return response.choices[0].message.content
+
+        usage = TokenUsage()
+        if response.usage:
+            usage.input_tokens = response.usage.prompt_tokens or 0
+            usage.output_tokens = response.usage.completion_tokens or 0
+            # OpenRouter may provide actual cost
+            cost = getattr(response.usage, "cost", None)
+            if cost is not None:
+                usage.cost_usd = float(cost)
+
+        return VisionResult(
+            text=response.choices[0].message.content,
+            usage=usage,
+        )
 
 
 class OpenAIProvider(BaseProvider):
@@ -146,7 +176,7 @@ class OpenAIProvider(BaseProvider):
         prior_text: Optional[str] = None,
         model: str = "gpt-4o",
         max_tokens: int = 4096,
-    ) -> str:
+    ) -> VisionResult:
         """
         Process image using OpenAI API.
 
@@ -158,7 +188,7 @@ class OpenAIProvider(BaseProvider):
             max_tokens: Maximum tokens in response.
 
         Returns:
-            Generated text response.
+            VisionResult with text and token usage.
         """
         full_prompt = prompt
         if prior_text:
@@ -191,7 +221,16 @@ class OpenAIProvider(BaseProvider):
             create_kwargs.pop("max_completion_tokens", None)
             create_kwargs["max_tokens"] = max_tokens
             response = self.client.chat.completions.create(**create_kwargs)
-        return response.choices[0].message.content
+
+        usage = TokenUsage()
+        if response.usage:
+            usage.input_tokens = response.usage.prompt_tokens or 0
+            usage.output_tokens = response.usage.completion_tokens or 0
+
+        return VisionResult(
+            text=response.choices[0].message.content,
+            usage=usage,
+        )
 
 
 class AnthropicProvider(BaseProvider):
@@ -216,7 +255,7 @@ class AnthropicProvider(BaseProvider):
         prior_text: Optional[str] = None,
         model: str = "claude-3-5-sonnet-20241022",
         max_tokens: int = 4096,
-    ) -> str:
+    ) -> VisionResult:
         """
         Process image using Anthropic API.
 
@@ -228,7 +267,7 @@ class AnthropicProvider(BaseProvider):
             max_tokens: Maximum tokens in response.
 
         Returns:
-            Generated text response.
+            VisionResult with text and token usage.
         """
         full_prompt = prompt
         if prior_text:
@@ -255,7 +294,16 @@ class AnthropicProvider(BaseProvider):
                 }
             ],
         )
-        return response.content[0].text
+
+        usage = TokenUsage(
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+        )
+
+        return VisionResult(
+            text=response.content[0].text,
+            usage=usage,
+        )
 
 
 class GoogleProvider(BaseProvider):
@@ -292,7 +340,7 @@ class GoogleProvider(BaseProvider):
         prior_text: Optional[str] = None,
         model: str = "gemini-3-pro",
         max_tokens: int = 4096,
-    ) -> str:
+    ) -> VisionResult:
         """
         Process image using Google Gemini API.
 
@@ -304,7 +352,7 @@ class GoogleProvider(BaseProvider):
             max_tokens: Maximum tokens in response (may be ignored by API).
 
         Returns:
-            Generated text response.
+            VisionResult with text and token usage.
         """
         full_prompt = prompt
         if prior_text:
@@ -341,14 +389,23 @@ class GoogleProvider(BaseProvider):
             raise ValueError(
                 f"Could not use any available Google model. Last error: {last_error}"
             ) from last_error
-        
+
+        # Extract usage metadata
+        usage = TokenUsage()
+        usage_meta = getattr(response, "usage_metadata", None)
+        if usage_meta:
+            usage.input_tokens = getattr(usage_meta, "prompt_token_count", 0) or 0
+            usage.output_tokens = getattr(usage_meta, "candidates_token_count", 0) or 0
+
         # Extract text from response
         if hasattr(response, "text"):
-            return response.text
+            text = response.text
         elif hasattr(response, "candidates") and response.candidates:
-            return response.candidates[0].content.parts[0].text
+            text = response.candidates[0].content.parts[0].text
         else:
-            return str(response)
+            text = str(response)
+
+        return VisionResult(text=text, usage=usage)
 
 
 def load_models_config() -> Dict:

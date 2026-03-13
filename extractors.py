@@ -11,6 +11,7 @@ import base64
 import io
 import logging
 import os
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import List, Optional, TYPE_CHECKING
@@ -27,7 +28,7 @@ from digital_text_parsers import (
 )
 
 if TYPE_CHECKING:
-    from llm_providers import BaseProvider
+    from llm_providers import BaseProvider, VisionResult
 
 
 @dataclass
@@ -106,6 +107,9 @@ class VisionExtractor(BaseExtractor):
         self.digital_text_parser: BaseDigitalTextParser = (
             self._digital_text_parser_selection.parser
         )
+        self._cost_lock = threading.Lock()
+        self._page_costs: list[dict] = []
+        self._pricing: tuple[float, float] | None = None
 
         # Validate mode
         if mode not in ["v", "vt"]:
@@ -114,6 +118,22 @@ class VisionExtractor(BaseExtractor):
     @property
     def name(self) -> str:
         return f"Vision ({self.model_id})"
+
+    def _get_pricing(self) -> tuple[float, float]:
+        """Return (input_cost_per_mtok, output_cost_per_mtok) from models.json, cached."""
+        if self._pricing is None:
+            from llm_providers import load_models_config
+            models_config = load_models_config()
+            # Find config matching our model_id (check both name keys and direct_id)
+            for _name, cfg in models_config.items():
+                if self.model_id in (cfg.get("direct_id"), cfg.get("openrouter_id"), _name):
+                    self._pricing = (
+                        cfg.get("input_cost_per_mtok", 0.0),
+                        cfg.get("output_cost_per_mtok", 0.0),
+                    )
+                    return self._pricing
+            self._pricing = (0.0, 0.0)
+        return self._pricing
 
     def extract(
         self,
@@ -135,6 +155,7 @@ class VisionExtractor(BaseExtractor):
         Returns:
             ExtractionResult with markdown content.
         """
+        self._page_costs = []
         pdf_file_name = os.path.basename(pdf_path)
 
         # Load page images and prior text
@@ -153,6 +174,11 @@ class VisionExtractor(BaseExtractor):
             results, len(images), pdf_file_name
         )
 
+        # Aggregate cost data
+        total_input_tokens = sum(c["input_tokens"] for c in self._page_costs)
+        total_output_tokens = sum(c["output_tokens"] for c in self._page_costs)
+        total_cost_usd = sum(c["cost_usd"] for c in self._page_costs)
+
         return ExtractionResult(
             markdown="\n".join(markdown_content),
             page_count=len(images),
@@ -167,6 +193,9 @@ class VisionExtractor(BaseExtractor):
                 "digital_text_parser_resolved": (
                     self._digital_text_parser_selection.resolved_parser
                 ),
+                "total_input_tokens": total_input_tokens,
+                "total_output_tokens": total_output_tokens,
+                "total_cost_usd": total_cost_usd,
             },
         )
 
@@ -292,15 +321,35 @@ class VisionExtractor(BaseExtractor):
         )
 
         image_base64 = self._pdf_image_to_base64_str(image)
-        markdown_text = self._process_image_with_provider(image_base64, prior_text)
+        vision_result = self._process_image_with_provider(image_base64, prior_text)
+
+        # Calculate cost for this page
+        usage = vision_result.usage
+        if usage.cost_usd is not None:
+            page_cost = usage.cost_usd
+        else:
+            input_rate, output_rate = self._get_pricing()
+            page_cost = (
+                usage.input_tokens * input_rate / 1_000_000
+                + usage.output_tokens * output_rate / 1_000_000
+            )
+
+        with self._cost_lock:
+            self._page_costs.append({
+                "page": page_index + 1,
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "cost_usd": page_cost,
+            })
 
         logger.debug(
-            f"Completed page {page_index + 1}/{total_pages} "
-            f"(0-indexed: {page_index})"
+            f"Completed page {page_index + 1}/{total_pages} — "
+            f"in={usage.input_tokens:,} out={usage.output_tokens:,} "
+            f"cost=${page_cost:.4f}"
         )
 
         page_header = f"File: {pdf_file_name}; Page: {page_index + 1}\n"
-        return page_index, page_header + markdown_text
+        return page_index, page_header + vision_result.text
 
     def _log_processing_errors(
         self,
@@ -449,7 +498,7 @@ class VisionExtractor(BaseExtractor):
         self,
         image_base64: str,
         prior_text: Optional[str] = None,
-    ) -> str:
+    ) -> "VisionResult":
         """
         Send image to LLM provider for processing.
 
@@ -458,7 +507,7 @@ class VisionExtractor(BaseExtractor):
             prior_text: Optional prior text for context.
 
         Returns:
-            Markdown text from the model.
+            VisionResult with text and token usage.
         """
         vision_base = (
             "Write a Markdown version of this page keeping as much of the "
