@@ -59,7 +59,7 @@ def _initialize_provider(
 
 def create_extractor(
     extractor_type: str,
-    model: str = "gpt-5.2",
+    model: str = "gpt-5.4",
     mode: str = "vt",
     digital_text_parser: str = "auto",
     prefer_openrouter: bool = True,
@@ -471,9 +471,9 @@ def main() -> None:
     parser.add_argument(
         "--model",
         type=str,
-        default="gpt-5.2",
+        default="gpt-5.4",
         help="Model identifier from models.json to use for both vision and text "
-        "processing (default: gpt-5.2).",
+        "processing (default: gpt-5.4).",
     )
     parser.add_argument(
         "--provider",

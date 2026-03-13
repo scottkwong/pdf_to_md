@@ -1,10 +1,16 @@
 {
+  "gpt-5.4": {
+    "provider": "openai",
+    "openrouter_id": "openai/gpt-5.4",
+    "direct_id": "gpt-5.4",
+    "supports_vision": true,
+    "default": true
+  },
   "gpt-5.2": {
     "provider": "openai",
     "openrouter_id": "openai/gpt-5.2",
     "direct_id": "gpt-5.2",
-    "supports_vision": true,
-    "default": true
+    "supports_vision": true
   },
   "openai-gpt4o": {
     "provider": "openai",

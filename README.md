@@ -182,7 +182,7 @@ The PDF pipeline is:
 
 ### Basic Usage
 
-To convert a PDF file (defaults to OpenAI GPT-5.2 via OpenRouter):
+To convert a PDF file (defaults to OpenAI GPT-5.4 via OpenRouter):
 
 ```bash
 ./pdf_to_md.py <path_to_pdf>
@@ -204,7 +204,7 @@ To utilize additional options:
 - `-o`, `--output_dir <output_directory>`: Destination for Markdown files. Defaults to PDF's location if unspecified.
 - `-m`, `--mode <mode>`: Sets processing mode. Choose 'v' for vision-only or 'vt' for vision-and-text (default: 'vt').
 - `--digital-text-parser <parser>`: Parser engine used for first-pass digital text parsing in `vt` mode. Options: `auto` (default), `pypdf`, `pymupdf`.
-- `--model <model>`: Model identifier from `models.json` to use for both vision and text processing (default: `gpt-5.2`).
+- `--model <model>`: Model identifier from `models.json` to use for both vision and text processing (default: `gpt-5.4`).
 - `--provider <provider>`: Force specific provider: `openrouter`, `openai`, `anthropic`, or `google` (optional).
 - `--prefer-direct`: Skip OpenRouter and use direct APIs only.
 - `-q`, `--quiet`: Disables verbose output. By default, the script prints markdown to console.
@@ -220,7 +220,8 @@ To utilize additional options:
 - `--benchmark-pdf <path>`: Optional PDF override for benchmark mode. If omitted, benchmark uses generated fixture PDFs from `tests/fixtures`.
 
 **Available Models** (defined in `models.json`):
-- `gpt-5.2` - OpenAI GPT-5.2 (default)
+- `gpt-5.4` - OpenAI GPT-5.4 (default)
+- `gpt-5.2` - OpenAI GPT-5.2
 - `openai-gpt4o` - OpenAI GPT-4o
 - `gemini-3-flash` - Google Gemini 3 Flash
 - `gemini-3-pro` - Google Gemini 3 Pro
@@ -235,7 +236,7 @@ To utilize additional options:
 # List all available models
 ./pdf_to_md.py --list-models
 
-# Use default model (GPT-5.2 via OpenRouter)
+# Use default model (GPT-5.4 via OpenRouter)
 ./pdf_to_md.py document.pdf
 
 # Use Gemini 3 Pro
