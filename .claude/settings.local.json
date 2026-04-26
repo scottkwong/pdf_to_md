@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tree:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nAdd BaseExtractor abstraction layer for PDF extraction\n\nIntroduce a new abstraction that supports multiple extraction methods:\n- BaseExtractor ABC with extract\\(\\) method and name property\n- ExtractionResult dataclass for standardized output\n- VisionExtractor wrapping existing page-by-page LLM vision flow\n\nThis decouples extraction logic from the main CLI, enabling alternative\nextraction methods like LlamaParse.\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(pipx list:*)",
+      "Bash(echo:*)",
+      "Bash(pdf_to_md:*)",
+      "Bash(/opt/homebrew/anaconda3/bin/pdf_to_md:*)",
+      "Bash(/Users/scottw/.local/bin/pdf_to_md:*)",
+      "Bash(pipx runpip:*)",
+      "Bash(/Users/scottw/Programming/utils/pdf_to_md/venv/bin/python:*)",
+      "Bash(./bootstrap.sh:*)",
+      "Bash(chmod +x:*)",
+      "Bash(/Users/scottw/Programming/utils/pdf_to_md/.venv/bin/python:*)",
+      "WebFetch(domain:developers.openai.com)",
+      "Bash(source:*)",
+      "Bash(git pull:*)",
+      "Bash(grep:*)",
+      "Bash(python3:*)",
+      "WebFetch(domain:openrouter.ai)",
+      "Bash(.venv/bin/pip show:*)",
+      "Bash(.venv/bin/pip install:*)"
+    ]
+  }
+}

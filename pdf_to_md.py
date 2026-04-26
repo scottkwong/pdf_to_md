@@ -59,10 +59,10 @@ def _initialize_provider(
 
 def create_extractor(
     extractor_type: str,
-    model: str = "gpt-5.4",
+    model: str = "gpt-5.5",
     mode: str = "vt",
     digital_text_parser: str = "auto",
-    prefer_openrouter: bool = True,
+    prefer_openrouter: bool = False,
     llamaparse_tier: str = "agentic",
     language: str = "en",
     verbose: bool = False,
@@ -232,7 +232,7 @@ def print_cli_configuration(args: argparse.Namespace, model: str) -> None:
         print(f"  Digital parser:     {args.digital_text_parser}")
         print(f"  Model:              {model}")
         print(f"  Provider override:  {args.provider or '(none - auto-detect)'}")
-        print(f"  Prefer OpenRouter:  {not args.prefer_direct}")
+        print(f"  Prefer OpenRouter:  {args.prefer_openrouter}")
         print(f"  Parallel pages:     {args.parallel}")
     if args.benchmark_digital_text_parsers:
         benchmark_target = args.benchmark_pdf or "(default generated fixtures)"
@@ -487,9 +487,9 @@ def main() -> None:
     parser.add_argument(
         "--model",
         type=str,
-        default="gpt-5.4",
+        default="gpt-5.5",
         help="Model identifier from models.json to use for both vision and text "
-        "processing (default: gpt-5.4).",
+        "processing (default: gpt-5.5).",
     )
     parser.add_argument(
         "--provider",
@@ -499,10 +499,11 @@ def main() -> None:
         help="Force specific provider (optional).",
     )
     parser.add_argument(
-        "--prefer-direct",
+        "--prefer-openrouter",
         action="store_true",
         default=False,
-        help="Skip OpenRouter and use direct APIs only.",
+        help="Route via OpenRouter when available. Default is to use direct "
+        "provider APIs.",
     )
     parser.add_argument(
         "-q",
@@ -625,7 +626,7 @@ def main() -> None:
 
     # Extract configuration from args
     model = args.model
-    prefer_openrouter = not args.prefer_direct
+    prefer_openrouter = args.prefer_openrouter
 
     # Print configuration
     print_cli_configuration(args, model)
