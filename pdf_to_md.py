@@ -67,12 +67,14 @@ def create_extractor(
     language: str = "en",
     verbose: bool = False,
     max_parallel_pages: int = 10,
+    local_model: str = "llama3.2-vision:11b",
+    ollama_url: str = "http://localhost:11434/api/generate",
 ) -> "BaseExtractor":
     """
     Create appropriate extractor based on type.
 
     Args:
-        extractor_type: Type of extractor ('vision' or 'llamaparse').
+        extractor_type: Type of extractor ('vision', 'llamaparse', or 'local').
         model: Model identifier for vision extractor.
         mode: Processing mode for vision extractor ('v' or 'vt').
         digital_text_parser: Parser engine for first-pass digital text parsing
@@ -82,6 +84,8 @@ def create_extractor(
         language: Document language for LlamaParse extractor.
         verbose: Enable verbose logging.
         max_parallel_pages: Max pages to process in parallel (VisionExtractor).
+        local_model: Ollama model tag for the local extractor.
+        ollama_url: Ollama generate endpoint for the local extractor.
 
     Returns:
         Configured BaseExtractor instance.
@@ -92,6 +96,26 @@ def create_extractor(
             tier=llamaparse_tier,
             language=language,
             verbose=verbose,
+        )
+    elif extractor_type == "local":
+        # Offline extraction via Ollama-OCR running against a local Ollama server.
+        from extractors import VisionExtractor
+        from local_ocr import LocalOllamaProvider, ensure_ollama_model
+
+        # Pull the model up front so weights download with visible progress
+        # before any page processing begins.
+        ensure_ollama_model(local_model, ollama_url, verbose=True)
+        provider = LocalOllamaProvider(
+            model_name=local_model,
+            base_url=ollama_url,
+            language=language,
+        )
+        return VisionExtractor(
+            provider=provider,
+            model_id=local_model,
+            mode=mode,
+            max_parallel_pages=max_parallel_pages,
+            digital_text_parser=digital_text_parser,
         )
     else:
         # Default: vision-based extraction
@@ -223,8 +247,15 @@ def print_cli_configuration(args: argparse.Namespace, model: str) -> None:
     print(f"  Version:            {_get_version()}")
     print(f"  Target path:        {args.target_path}")
     print(f"  Output directory:   {args.output_dir or '(default: same as input)'}")
-    print(f"  Extractor:          {args.extractor}")
-    if args.extractor == "llamaparse":
+    effective_extractor = "local" if args.local else args.extractor
+    print(f"  Extractor:          {effective_extractor}")
+    if args.local:
+        print(f"  Local model:        {args.local_model}")
+        print(f"  Ollama URL:         {args.ollama_url}")
+        print(f"  Mode:               {args.mode}")
+        print(f"  Digital parser:     {args.digital_text_parser}")
+        print(f"  Parallel pages:     {args.parallel}")
+    elif args.extractor == "llamaparse":
         print(f"  LlamaParse tier:    {args.llamaparse_tier}")
         print(f"  Language:           {args.language}")
     else:
@@ -234,6 +265,15 @@ def print_cli_configuration(args: argparse.Namespace, model: str) -> None:
         print(f"  Provider override:  {args.provider or '(none - auto-detect)'}")
         print(f"  Prefer OpenRouter:  {args.prefer_openrouter}")
         print(f"  Parallel pages:     {args.parallel}")
+    if args.benchmark:
+        benchmark_target = (
+            args.benchmark_pdf
+            or (args.target_path if args.target_path else "(default generated fixtures)")
+        )
+        models_desc = args.benchmark_models or "(default: top OpenAI, Anthropic, Local)"
+        print(f"  Benchmark mode:     model comparison")
+        print(f"  Benchmark models:   {models_desc}")
+        print(f"  Benchmark target:   {benchmark_target}")
     if args.benchmark_digital_text_parsers:
         benchmark_target = args.benchmark_pdf or "(default generated fixtures)"
         print(f"  Benchmark mode:     {args.benchmark_digital_text_parsers}")
@@ -543,7 +583,28 @@ def main() -> None:
         choices=["vision", "llamaparse"],
         default="vision",
         help="Extraction method: 'vision' (LLM-based, default) or 'llamaparse' "
-        "(LlamaCloud API).",
+        "(LlamaCloud API). Ignored when --local is set.",
+    )
+    parser.add_argument(
+        "--local",
+        action="store_true",
+        default=False,
+        help="Run OCR fully offline via Ollama-OCR (imanoop7/Ollama-OCR) using "
+        "a local Ollama server. No API keys or per-token cost.",
+    )
+    parser.add_argument(
+        "--local-model",
+        type=str,
+        default="llama3.2-vision:11b",
+        help="Ollama vision model tag to use with --local and as the local "
+        "entry in --benchmark (default: llama3.2-vision:11b).",
+    )
+    parser.add_argument(
+        "--ollama-url",
+        type=str,
+        default="http://localhost:11434/api/generate",
+        help="Ollama generate endpoint for --local / local benchmark models "
+        "(default: http://localhost:11434/api/generate).",
     )
     parser.add_argument(
         "--llamaparse-tier",
@@ -573,6 +634,24 @@ def main() -> None:
         default="auto",
         help="Parser engine for first-pass digital text parsing in mode 'vt'. "
         "Defaults to 'auto' (prefers PyMuPDF when installed).",
+    )
+    parser.add_argument(
+        "--benchmark",
+        action="store_true",
+        default=False,
+        help="Benchmark and compare the top model from each provider "
+        "(OpenAI, Anthropic, and Local) on the same PDF, then exit. Runs "
+        "models in parallel and streams progress. The local model may need "
+        "to download weights on first run.",
+    )
+    parser.add_argument(
+        "--benchmark-models",
+        type=str,
+        default=None,
+        help="Comma-separated override for --benchmark, e.g. "
+        "'gpt-5.5,claude-opus-4.6,local'. Use 'local' or 'local:<model>' for "
+        "an Ollama model; other entries are models.json keys. Defaults to the "
+        "top OpenAI, Anthropic, and Local models.",
     )
     parser.add_argument(
         "--benchmark-digital-text-parsers",
@@ -620,8 +699,12 @@ def main() -> None:
         print(f"pdf_to_md {_get_version()}")
         sys.exit(0)
 
-    # Require target_path if not listing models
-    if not args.target_path and not args.benchmark_digital_text_parsers:
+    # Require target_path unless in a mode that supplies its own input
+    if (
+        not args.target_path
+        and not args.benchmark_digital_text_parsers
+        and not args.benchmark
+    ):
         parser.error("target_path is required unless using --list-models")
 
     # Extract configuration from args
@@ -631,7 +714,45 @@ def main() -> None:
     # Print configuration
     print_cli_configuration(args, model)
 
-    if args.extractor == "vision":
+    if args.benchmark:
+        from benchmark_models import (
+            benchmark_models,
+            default_benchmark_specs,
+            parse_benchmark_specs,
+            print_model_benchmark_report,
+        )
+
+        if args.benchmark_models:
+            specs = parse_benchmark_specs(
+                args.benchmark_models,
+                local_model=args.local_model,
+                ollama_url=args.ollama_url,
+                prefer_openrouter=prefer_openrouter,
+            )
+        else:
+            specs = default_benchmark_specs(
+                local_model=args.local_model,
+                ollama_url=args.ollama_url,
+                prefer_openrouter=prefer_openrouter,
+            )
+
+        # Prefer an explicit benchmark PDF, then a target file, else fixtures.
+        benchmark_pdf = args.benchmark_pdf
+        if not benchmark_pdf and args.target_path and os.path.isfile(
+            args.target_path
+        ):
+            benchmark_pdf = args.target_path
+
+        results = benchmark_models(
+            specs=specs,
+            pdf_path=benchmark_pdf,
+            output_dir=args.output_dir,
+            max_parallel_pages=args.parallel,
+        )
+        print_model_benchmark_report(results)
+        sys.exit(0)
+
+    if args.extractor == "vision" and not args.local:
         print_digital_text_parser_resolution(args.digital_text_parser)
 
     if args.benchmark_digital_text_parsers:
@@ -648,7 +769,32 @@ def main() -> None:
 
     # Create extractor and handle model resolution
     extractor = None
-    if args.extractor == "llamaparse":
+    if args.local:
+        print_digital_text_parser_resolution(args.digital_text_parser)
+        try:
+            extractor = create_extractor(
+                extractor_type="local",
+                mode=args.mode,
+                digital_text_parser=args.digital_text_parser,
+                language=args.language,
+                verbose=args.verbose,
+                max_parallel_pages=args.parallel,
+                local_model=args.local_model,
+                ollama_url=args.ollama_url,
+            )
+            print("=" * 70)
+            print("Local OCR Configuration (Ollama-OCR):")
+            print("=" * 70)
+            print(f"  Extractor:          {extractor.name}")
+            print(f"  Local model:        {args.local_model}")
+            print(f"  Ollama URL:         {args.ollama_url}")
+            print(f"  Mode:               {args.mode}")
+            print("=" * 70)
+            print()
+        except (ValueError, ImportError, RuntimeError) as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+    elif args.extractor == "llamaparse":
         try:
             extractor = create_extractor(
                 extractor_type="llamaparse",

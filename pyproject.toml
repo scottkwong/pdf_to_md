@@ -26,6 +26,7 @@ dependencies = [
 
 [project.optional-dependencies]
 pymupdf = ["pymupdf>=1.24.0"]
+local = ["ollama-ocr>=0.1.3"]
 
 [project.scripts]
 pdf_to_md = "pdf_to_md:main"
@@ -41,7 +42,9 @@ py-modules = [
     "llm_providers",
     "digital_text_parsers",
     "llamaparse_extractor",
+    "local_ocr",
     "benchmark_digital_text_parsers",
+    "benchmark_models",
     "models_config",
 ]
 

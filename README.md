@@ -212,12 +212,17 @@ To utilize additional options:
 - `-s`, `--single`: Process files sequentially instead of in parallel when using `-r`.
 - `-p`, `--parallel [N]`: Max parallel pages to process with VisionExtractor (default: 10). Controls how many pages are processed concurrently.
 - `-d`, `--debug`: Enable debug logging for page processing order. Useful for diagnosing page ordering issues.
-- `--extractor <extractor>`: Extraction method: `vision` (default, LLM-based) or `llamaparse` (LlamaCloud API).
+- `--extractor <extractor>`: Extraction method: `vision` (default, LLM-based) or `llamaparse` (LlamaCloud API). Ignored when `--local` is set.
+- `--local`: Run OCR fully offline via [Ollama-OCR](https://github.com/imanoop7/Ollama-OCR) and a local Ollama server. No API keys and no per-token cost.
+- `--local-model <tag>`: Ollama vision model tag to use with `--local` and as the local entry in `--benchmark` (default: `llama3.2-vision:11b`).
+- `--ollama-url <url>`: Ollama generate endpoint for `--local` / local benchmark models (default: `http://localhost:11434/api/generate`).
 - `--llamaparse-tier <tier>`: LlamaParse processing tier (only with `--extractor llamaparse`): `fast`, `cost_effective`, `agentic` (default), `agentic_plus`.
 - `--language <lang>`: Document language code for LlamaParse (default: `en`).
+- `--benchmark`: Benchmark and compare the top model from each provider (OpenAI, Anthropic, and Local) on the same PDF, then exit. Runs models in parallel and streams progress. The local model may download weights on first run.
+- `--benchmark-models <list>`: Comma-separated override for `--benchmark`, e.g. `gpt-5.5,claude-opus-4.6,local`. Use `local` or `local:<model>` for an Ollama model; other entries are `models.json` keys.
 - `--benchmark-digital-text-parsers`: Run a direct package benchmark (no LLM calls) comparing pypdf and PyMuPDF digital text parsers, then exit.
 - `--benchmark-runs <N>`: Number of benchmark runs per parser (default: `10`).
-- `--benchmark-pdf <path>`: Optional PDF override for benchmark mode. If omitted, benchmark uses generated fixture PDFs from `tests/fixtures`.
+- `--benchmark-pdf <path>`: Optional PDF override for benchmark modes. If omitted, `--benchmark-digital-text-parsers` and `--benchmark` use generated fixture PDFs from `tests/fixtures`.
 
 **Available Models** (defined in `models.json`):
 - `gpt-5.5` - OpenAI GPT-5.5 (default)
@@ -274,6 +279,21 @@ To utilize additional options:
 # Use LlamaParse for non-English documents
 ./pdf_to_md.py document.pdf --extractor llamaparse --language de
 
+# Run fully offline with local Ollama-OCR (no API keys)
+./pdf_to_md.py document.pdf --local
+
+# Use a different local model
+./pdf_to_md.py document.pdf --local --local-model granite3.2-vision
+
+# Point at an Ollama server on another host
+./pdf_to_md.py document.pdf --local --ollama-url http://192.168.1.10:11434/api/generate
+
+# Benchmark the top OpenAI, Anthropic, and Local models on one PDF (parallel)
+./pdf_to_md.py document.pdf --benchmark
+
+# Benchmark a custom set of models
+./pdf_to_md.py --benchmark --benchmark-models "gpt-5.5,claude-opus-4.6,local:llava" --benchmark-pdf document.pdf
+
 # Force pypdf digital text parser
 ./pdf_to_md.py document.pdf --digital-text-parser pypdf
 
@@ -307,6 +327,62 @@ LlamaParse tiers:
 - `cost_effective` - Budget-friendly for standard documents
 - `agentic` - Balanced accuracy and speed (default)
 - `agentic_plus` - Maximum fidelity for complex layouts
+
+**Local extraction (`--local`):** Runs OCR fully offline via
+[Ollama-OCR](https://github.com/imanoop7/Ollama-OCR) against a local
+[Ollama](https://ollama.com) server. No API keys and no per-token cost — your
+documents never leave the machine. It reuses the same page-by-page parallel
+pipeline as vision extraction (including `vt` first-pass digital text), just
+swapping the cloud provider for a local Ollama vision model.
+
+Setup:
+
+```bash
+# 1. Install Ollama (https://ollama.com) and start the server
+ollama serve
+
+# 2. Install the optional dependency
+pip install ".[local]"        # or: pip install ollama-ocr
+
+# 3. Run offline (the model is pulled automatically on first use)
+./pdf_to_md.py document.pdf --local
+```
+
+The first run downloads the model weights (`llama3.2-vision:11b` by default);
+progress is streamed to the console. Choose another Ollama vision model with
+`--local-model` (e.g. `llava`, `granite3.2-vision`, `minicpm-v`,
+`moondream`) and point at a non-default server with `--ollama-url`.
+
+### Model benchmark (`--benchmark`)
+
+`--benchmark` runs the **same PDF** through the top model from each provider
+and prints a side-by-side comparison of time, pages, output size, and cost.
+By default it compares:
+
+- **OpenAI** — `gpt-5.5` (requires `OPENAI_API_KEY`)
+- **Anthropic** — `claude-opus-4.6` (requires `ANTHROPIC_API_KEY`)
+- **Local** — `llama3.2-vision:11b` via Ollama-OCR
+
+Models run **concurrently** (one worker per model), and each model's own
+extractor processes its pages in parallel, so the benchmark does as much work
+at once as possible. Progress for every model is streamed with a per-model
+`[label]` tag, and the local model's weight download (if needed) is streamed
+as progress too. Any model whose API key is missing, or whose Ollama server is
+unreachable, is reported as **skipped** with the reason rather than failing the
+run.
+
+```bash
+# Compare top OpenAI, Anthropic, and Local models on one PDF
+./pdf_to_md.py document.pdf --benchmark
+
+# No PDF given -> uses a generated fixture PDF
+./pdf_to_md.py --benchmark
+
+# Custom set; save each model's markdown to ./out for inspection
+./pdf_to_md.py --benchmark \
+  --benchmark-models "gpt-5.5,claude-opus-4.6,local" \
+  --benchmark-pdf document.pdf -o ./out
+```
 
 ### Provider Selection
 
