@@ -67,8 +67,10 @@ def create_extractor(
     language: str = "en",
     verbose: bool = False,
     max_parallel_pages: int = 10,
-    local_model: str = "llama3.2-vision:11b",
+    local_model: str = "qwen2.5vl:7b",
     ollama_url: str = "http://localhost:11434/api/generate",
+    local_num_ctx: int = 16384,
+    local_num_predict: int = 8192,
 ) -> "BaseExtractor":
     """
     Create appropriate extractor based on type.
@@ -86,6 +88,8 @@ def create_extractor(
         max_parallel_pages: Max pages to process in parallel (VisionExtractor).
         local_model: Ollama model tag for the local extractor.
         ollama_url: Ollama generate endpoint for the local extractor.
+        local_num_ctx: Context window in tokens for the local extractor.
+        local_num_predict: Output token budget per page for the local extractor.
 
     Returns:
         Configured BaseExtractor instance.
@@ -98,7 +102,7 @@ def create_extractor(
             verbose=verbose,
         )
     elif extractor_type == "local":
-        # Offline extraction via Ollama-OCR running against a local Ollama server.
+        # Offline extraction against a locally running Ollama server.
         from extractors import VisionExtractor
         from local_ocr import LocalOllamaProvider, ensure_ollama_model
 
@@ -108,7 +112,8 @@ def create_extractor(
         provider = LocalOllamaProvider(
             model_name=local_model,
             base_url=ollama_url,
-            language=language,
+            num_ctx=local_num_ctx,
+            num_predict=local_num_predict,
         )
         return VisionExtractor(
             provider=provider,
@@ -252,6 +257,8 @@ def print_cli_configuration(args: argparse.Namespace, model: str) -> None:
     if args.local:
         print(f"  Local model:        {args.local_model}")
         print(f"  Ollama URL:         {args.ollama_url}")
+        print(f"  Context window:     {args.local_num_ctx} tokens")
+        print(f"  Output budget:      {args.local_num_predict} tokens/page")
         print(f"  Mode:               {args.mode}")
         print(f"  Digital parser:     {args.digital_text_parser}")
         print(f"  Parallel pages:     {args.parallel}")
@@ -589,15 +596,15 @@ def main() -> None:
         "--local",
         action="store_true",
         default=False,
-        help="Run OCR fully offline via Ollama-OCR (imanoop7/Ollama-OCR) using "
-        "a local Ollama server. No API keys or per-token cost.",
+        help="Run OCR fully offline against a local Ollama server. No API "
+        "keys or per-token cost.",
     )
     parser.add_argument(
         "--local-model",
         type=str,
-        default="llama3.2-vision:11b",
+        default="qwen2.5vl:7b",
         help="Ollama vision model tag to use with --local and as the local "
-        "entry in --benchmark (default: llama3.2-vision:11b).",
+        "entry in --benchmark (default: qwen2.5vl:7b).",
     )
     parser.add_argument(
         "--ollama-url",
@@ -605,6 +612,23 @@ def main() -> None:
         default="http://localhost:11434/api/generate",
         help="Ollama generate endpoint for --local / local benchmark models "
         "(default: http://localhost:11434/api/generate).",
+    )
+    parser.add_argument(
+        "--local-num-ctx",
+        type=int,
+        default=16384,
+        help="Context window in tokens for --local / local benchmark models "
+        "(default: 16384). Sized for one page plus its prior text; raising it "
+        "increases memory use sharply, since the KV cache scales with it.",
+    )
+    parser.add_argument(
+        "--local-num-predict",
+        type=int,
+        default=8192,
+        help="Output token budget per page for --local / local benchmark "
+        "models (default: 8192). Reasoning models such as qwen3-vl spend this "
+        "budget thinking before they answer, and return an empty page if it "
+        "runs out; non-reasoning models stop early and are unaffected.",
     )
     parser.add_argument(
         "--llamaparse-tier",
@@ -652,6 +676,15 @@ def main() -> None:
         "'gpt-5.5,claude-opus-4.6,local'. Use 'local' or 'local:<model>' for "
         "an Ollama model; other entries are models.json keys. Defaults to the "
         "top OpenAI, Anthropic, and Local models.",
+    )
+    parser.add_argument(
+        "--benchmark-reference",
+        type=str,
+        default=None,
+        help="Model label to use as the baseline in the --benchmark HTML "
+        "comparison; every other model is diffed against it and it is shown "
+        "first. Defaults to the first benchmarked model. Remaining models are "
+        "ordered cheapest-first.",
     )
     parser.add_argument(
         "--benchmark-digital-text-parsers",
@@ -716,11 +749,13 @@ def main() -> None:
 
     if args.benchmark:
         from benchmark_models import (
+            _resolve_benchmark_pdf,
             benchmark_models,
             default_benchmark_specs,
             parse_benchmark_specs,
             print_model_benchmark_report,
         )
+        from benchmark_report import write_benchmark_html
 
         if args.benchmark_models:
             specs = parse_benchmark_specs(
@@ -728,12 +763,16 @@ def main() -> None:
                 local_model=args.local_model,
                 ollama_url=args.ollama_url,
                 prefer_openrouter=prefer_openrouter,
+                num_ctx=args.local_num_ctx,
+                num_predict=args.local_num_predict,
             )
         else:
             specs = default_benchmark_specs(
                 local_model=args.local_model,
                 ollama_url=args.ollama_url,
                 prefer_openrouter=prefer_openrouter,
+                num_ctx=args.local_num_ctx,
+                num_predict=args.local_num_predict,
             )
 
         # Prefer an explicit benchmark PDF, then a target file, else fixtures.
@@ -742,14 +781,41 @@ def main() -> None:
             args.target_path
         ):
             benchmark_pdf = args.target_path
+        benchmark_pdf = _resolve_benchmark_pdf(benchmark_pdf)
+
+        # A benchmark always lands its artifacts, so the markdown and the HTML
+        # comparison are there to inspect without needing -o.
+        benchmark_dir = args.output_dir or os.path.join(
+            os.getcwd(), "benchmark_output"
+        )
 
         results = benchmark_models(
             specs=specs,
             pdf_path=benchmark_pdf,
-            output_dir=args.output_dir,
+            output_dir=benchmark_dir,
             max_parallel_pages=args.parallel,
         )
         print_model_benchmark_report(results)
+
+        stem = os.path.basename(benchmark_pdf).rsplit(".", 1)[0]
+        html_path = write_benchmark_html(
+            results=results,
+            pdf_path=benchmark_pdf,
+            output_path=os.path.join(benchmark_dir, f"{stem}.comparison.html"),
+            reference_label=args.benchmark_reference,
+        )
+        if html_path:
+            # A file:// URL so the terminal renders it as a clickable link;
+            # the plain path is kept for copy/paste and for piping to `open`.
+            from pathlib import Path
+
+            url = Path(html_path).resolve().as_uri()
+            print()
+            print("=" * 88)
+            print("Visual comparison (PDF page vs each model, side by side):")
+            print(f"  {url}")
+            print(f"  open {html_path}")
+            print("=" * 88)
         sys.exit(0)
 
     if args.extractor == "vision" and not args.local:
@@ -781,9 +847,11 @@ def main() -> None:
                 max_parallel_pages=args.parallel,
                 local_model=args.local_model,
                 ollama_url=args.ollama_url,
+                local_num_ctx=args.local_num_ctx,
+                local_num_predict=args.local_num_predict,
             )
             print("=" * 70)
-            print("Local OCR Configuration (Ollama-OCR):")
+            print("Local OCR Configuration (Ollama):")
             print("=" * 70)
             print(f"  Extractor:          {extractor.name}")
             print(f"  Local model:        {args.local_model}")

@@ -7,7 +7,7 @@ By default it compares:
 
 - OpenAI:    ``gpt-5.5``            (cloud API, requires OPENAI_API_KEY)
 - Anthropic: ``claude-opus-4.6``    (cloud API, requires ANTHROPIC_API_KEY)
-- Local:     ``llama3.2-vision:11b`` (offline via Ollama-OCR)
+- Local:     ``qwen2.5vl:7b``        (offline via a local Ollama server)
 
 Models run concurrently (one worker per model), and each model's own
 ``VisionExtractor`` processes its pages in parallel too, so the benchmark does
@@ -28,10 +28,11 @@ from typing import List, Optional
 
 from local_ocr import (
     DEFAULT_LOCAL_MODEL,
+    DEFAULT_NUM_CTX,
+    DEFAULT_NUM_PREDICT,
     DEFAULT_OLLAMA_GENERATE_URL,
     LocalOllamaProvider,
     ensure_ollama_model,
-    is_ollama_ocr_available,
     is_ollama_running,
 )
 
@@ -52,10 +53,12 @@ class BenchmarkModelSpec:
 
     Attributes:
         label: Human-readable name shown in progress lines and the report.
-        kind: ``"api"`` for cloud providers or ``"local"`` for Ollama-OCR.
+        kind: ``"api"`` for cloud providers or ``"local"`` for Ollama.
         model: models.json key (api) or Ollama model tag (local).
         prefer_openrouter: Route cloud calls via OpenRouter when available.
         ollama_url: Ollama generate endpoint for local models.
+        num_ctx: Context window in tokens for local models.
+        num_predict: Output token budget per page for local models.
     """
 
     label: str
@@ -63,6 +66,8 @@ class BenchmarkModelSpec:
     model: str
     prefer_openrouter: bool = False
     ollama_url: str = DEFAULT_OLLAMA_GENERATE_URL
+    num_ctx: int = DEFAULT_NUM_CTX
+    num_predict: int = DEFAULT_NUM_PREDICT
 
 
 @dataclass
@@ -80,6 +85,8 @@ class BenchmarkModelResult:
         output_tokens: Total output tokens (0 for local).
         cost_usd: Total cost in USD (0 for local).
         output_path: Where the markdown was saved, if applicable.
+        markdown: The produced markdown, retained so the HTML comparison
+            report can diff models page by page.
     """
 
     spec: BenchmarkModelSpec
@@ -92,12 +99,15 @@ class BenchmarkModelResult:
     output_tokens: int = 0
     cost_usd: float = 0.0
     output_path: Optional[str] = None
+    markdown: str = ""
 
 
 def default_benchmark_specs(
     local_model: str = DEFAULT_LOCAL_MODEL,
     ollama_url: str = DEFAULT_OLLAMA_GENERATE_URL,
     prefer_openrouter: bool = False,
+    num_ctx: int = DEFAULT_NUM_CTX,
+    num_predict: int = DEFAULT_NUM_PREDICT,
 ) -> List[BenchmarkModelSpec]:
     """Return the default top-model-per-provider benchmark set.
 
@@ -105,6 +115,8 @@ def default_benchmark_specs(
         local_model: Ollama model tag for the local entry.
         ollama_url: Ollama generate endpoint for the local entry.
         prefer_openrouter: Whether cloud entries should prefer OpenRouter.
+        num_ctx: Context window in tokens for the local entry.
+        num_predict: Output token budget per page for the local entry.
 
     Returns:
         List of specs for OpenAI, Anthropic, and Local top models.
@@ -127,6 +139,8 @@ def default_benchmark_specs(
             kind="local",
             model=local_model,
             ollama_url=ollama_url,
+            num_ctx=num_ctx,
+            num_predict=num_predict,
         ),
     ]
 
@@ -136,6 +150,8 @@ def parse_benchmark_specs(
     local_model: str = DEFAULT_LOCAL_MODEL,
     ollama_url: str = DEFAULT_OLLAMA_GENERATE_URL,
     prefer_openrouter: bool = False,
+    num_ctx: int = DEFAULT_NUM_CTX,
+    num_predict: int = DEFAULT_NUM_PREDICT,
 ) -> List[BenchmarkModelSpec]:
     """Parse a comma-separated ``--benchmark-models`` override into specs.
 
@@ -147,6 +163,8 @@ def parse_benchmark_specs(
         local_model: Default Ollama model when an entry is bare ``local``.
         ollama_url: Ollama generate endpoint for local entries.
         prefer_openrouter: Whether cloud entries should prefer OpenRouter.
+        num_ctx: Context window in tokens for local entries.
+        num_predict: Output token budget per page for local entries.
 
     Returns:
         List of parsed specs, preserving input order.
@@ -168,6 +186,8 @@ def parse_benchmark_specs(
                     kind="local",
                     model=local_model,
                     ollama_url=ollama_url,
+                    num_ctx=num_ctx,
+                    num_predict=num_predict,
                 )
             )
         elif lowered.startswith("local:"):
@@ -178,6 +198,8 @@ def parse_benchmark_specs(
                     kind="local",
                     model=model,
                     ollama_url=ollama_url,
+                    num_ctx=num_ctx,
+                    num_predict=num_predict,
                 )
             )
         else:
@@ -281,8 +303,6 @@ def _precheck_local_spec(spec: BenchmarkModelSpec) -> Optional[str]:
     Returns:
         A human-readable skip reason, or None when the spec is runnable.
     """
-    if not is_ollama_ocr_available():
-        return "ollama-ocr not installed (pip install \".[local]\")"
     if not is_ollama_running(spec.ollama_url):
         return f"no Ollama server reachable at {spec.ollama_url}"
     return None
@@ -304,7 +324,10 @@ def _build_extractor(spec: BenchmarkModelSpec, max_parallel_pages: int):
         _log(f"[{spec.label}] ensuring model is downloaded...")
         ensure_ollama_model(spec.model, spec.ollama_url, verbose=True)
         provider = LocalOllamaProvider(
-            model_name=spec.model, base_url=spec.ollama_url
+            model_name=spec.model,
+            base_url=spec.ollama_url,
+            num_ctx=spec.num_ctx,
+            num_predict=spec.num_predict,
         )
         model_id = spec.model
     else:
@@ -408,6 +431,7 @@ def _run_single_benchmark(
         output_tokens=meta.get("total_output_tokens", 0),
         cost_usd=meta.get("total_cost_usd", 0.0),
         output_path=output_path,
+        markdown=result.markdown,
     )
 
 
@@ -417,7 +441,12 @@ def benchmark_models(
     output_dir: Optional[str] = None,
     max_parallel_pages: int = 10,
 ) -> List[BenchmarkModelResult]:
-    """Benchmark several models against the same PDF, concurrently.
+    """Benchmark several models against the same PDF.
+
+    Cloud models run concurrently, since their latency is the remote API's.
+    Local models run one at a time: they share a single GPU, so overlapping
+    them measures contention rather than the model, inflating every local time
+    (observed: 13x) while telling you nothing useful.
 
     Args:
         specs: Models to benchmark.
@@ -435,31 +464,47 @@ def benchmark_models(
         raise ValueError("At least one model spec is required to benchmark.")
 
     resolved_pdf = _resolve_benchmark_pdf(pdf_path)
+    local_count = sum(1 for s in specs if s.kind == "local")
 
     _log("=" * 70)
     _log("Cross-Provider Model Benchmark")
     _log("=" * 70)
     _log(f"Input PDF: {resolved_pdf}")
-    _log(f"Models ({len(specs)}), running in parallel:")
+    _log(f"Models ({len(specs)}):")
     for spec in specs:
         _log(f"  - {spec.label} [{spec.kind}]")
+    if local_count > 1:
+        _log(
+            f"Note: {local_count} local models share one GPU and will run "
+            "one at a time so their timings stay comparable."
+        )
     _log("=" * 70)
 
     results: List[Optional[BenchmarkModelResult]] = [None] * len(specs)
-    with ThreadPoolExecutor(max_workers=len(specs)) as executor:
-        future_to_index = {
-            executor.submit(
-                _run_single_benchmark,
-                spec,
-                resolved_pdf,
-                output_dir,
-                max_parallel_pages,
-            ): index
-            for index, spec in enumerate(specs)
-        }
-        for future in as_completed(future_to_index):
-            index = future_to_index[future]
-            results[index] = future.result()
+
+    def run(index: int) -> None:
+        """Benchmark one spec and record its result by original position."""
+        results[index] = _run_single_benchmark(
+            specs[index], resolved_pdf, output_dir, max_parallel_pages
+        )
+
+    api_indices = [i for i, s in enumerate(specs) if s.kind != "local"]
+    local_indices = [i for i, s in enumerate(specs) if s.kind == "local"]
+
+    # Cloud models overlap freely; the local queue is drained on one worker so
+    # only one model occupies the GPU at a time.
+    with ThreadPoolExecutor(max_workers=max(1, len(api_indices) + 1)) as executor:
+        futures = [executor.submit(run, i) for i in api_indices]
+        if local_indices:
+
+            def run_locals_in_sequence() -> None:
+                """Run every local model back to back on a single worker."""
+                for index in local_indices:
+                    run(index)
+
+            futures.append(executor.submit(run_locals_in_sequence))
+        for future in as_completed(futures):
+            future.result()
 
     return [r for r in results if r is not None]
 

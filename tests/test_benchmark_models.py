@@ -35,11 +35,24 @@ def test_parse_specs_handles_local_variants() -> None:
     """parse_benchmark_specs recognizes local, local:<model>, and api keys."""
     specs = parse_benchmark_specs(
         "gpt-5.5, local, local:granite3.2-vision",
-        local_model="llama3.2-vision:11b",
+        local_model="qwen2.5vl:7b",
     )
     assert specs[0].kind == "api" and specs[0].model == "gpt-5.5"
-    assert specs[1].kind == "local" and specs[1].model == "llama3.2-vision:11b"
+    assert specs[1].kind == "local" and specs[1].model == "qwen2.5vl:7b"
     assert specs[2].kind == "local" and specs[2].model == "granite3.2-vision"
+
+
+def test_default_local_model_is_a_transcription_model() -> None:
+    """The shipped local default is a model verified to transcribe pages.
+
+    Guards the default against regressing to a model that cannot run (e.g.
+    llama3.2-vision, whose mllama architecture current Ollama dropped) or one
+    that captions rather than transcribes.
+    """
+    from local_ocr import DEFAULT_LOCAL_MODEL
+
+    assert DEFAULT_LOCAL_MODEL == "qwen2.5vl:7b"
+    assert default_benchmark_specs()[2].model == DEFAULT_LOCAL_MODEL
 
 
 def test_parse_specs_rejects_empty() -> None:
@@ -116,23 +129,15 @@ def test_api_routing_prefers_direct_when_key_present() -> None:
 
 
 def test_local_precheck_skips_when_ollama_unavailable() -> None:
-    """Local spec is skipped when ollama-ocr or the server is unavailable."""
+    """A local spec is skipped with a reason when no server is reachable."""
     spec = BenchmarkModelSpec(label="local", kind="local", model="llava")
-    with mock.patch(
-        "benchmark_models.is_ollama_ocr_available", return_value=False
-    ):
-        reason = _precheck_local_spec(spec)
-    assert reason is not None
-    assert "ollama-ocr" in reason
-
-    with mock.patch(
-        "benchmark_models.is_ollama_ocr_available", return_value=True
-    ), mock.patch(
-        "benchmark_models.is_ollama_running", return_value=False
-    ):
+    with mock.patch("benchmark_models.is_ollama_running", return_value=False):
         reason = _precheck_local_spec(spec)
     assert reason is not None
     assert "Ollama server" in reason
+
+    with mock.patch("benchmark_models.is_ollama_running", return_value=True):
+        assert _precheck_local_spec(spec) is None
 
 
 def run_all_tests() -> bool:

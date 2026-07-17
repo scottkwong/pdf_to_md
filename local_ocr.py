@@ -1,36 +1,79 @@
 """
-Local, offline OCR via Ollama and the Ollama-OCR project.
+Local, offline OCR against a locally running Ollama server.
 
-This module integrates https://github.com/imanoop7/Ollama-OCR as an optional
-add-on so pages can be transcribed entirely on-device (no external API calls,
-no per-token cost). It exposes a ``LocalOllamaProvider`` that plugs into the
-existing ``VisionExtractor`` pipeline exactly like the cloud providers in
-``llm_providers``, so the ``--local`` flag reuses all of the parallel
-page-processing, prior-text, and markdown-assembly machinery unchanged.
+Pages are transcribed entirely on-device: no external API calls, no per-token
+cost, and documents never leave the machine. ``LocalOllamaProvider`` plugs into
+the existing ``VisionExtractor`` pipeline exactly like the cloud providers in
+``llm_providers``, so ``--local`` reuses all of the parallel page-processing,
+prior-text, and markdown-assembly machinery unchanged.
 
-Ollama-OCR (the ``ollama-ocr`` PyPI package) wraps an Ollama server and a
-vision model (LLaVA, Llama 3.2 Vision, Granite Vision, MiniCPM-V, ...). It
-runs as a background engine: images are sent to a locally running Ollama
-server, which must have the requested model pulled. The helpers below detect
-whether the server is reachable and pull models on demand while streaming
-progress to the console (the first run of a model can take a while because the
-weights are downloaded).
+Ollama must be installed and running with a vision model pulled (Qwen-VL,
+LLaVA, Granite Vision, MiniCPM-V, ...); the helpers below detect whether the
+server is reachable and pull models on demand, streaming progress to the
+console since the first run of a model downloads its weights.
+
+This talks to Ollama's HTTP API directly rather than through a wrapper library,
+which is what lets it size the context window per request (see
+``DEFAULT_NUM_CTX``), bound each request with a timeout, and surface server
+errors as exceptions instead of as page text.
 """
 from __future__ import annotations
 
-import base64
 import json
-import os
-import tempfile
-import threading
+import re
 from typing import List, Optional
 
 from llm_providers import BaseProvider, TokenUsage, VisionResult
 
-# Default Ollama vision model and server endpoint. The generate URL is the one
-# Ollama-OCR's OCRProcessor expects; pull/tags URLs are derived from it.
-DEFAULT_LOCAL_MODEL = "llama3.2-vision:11b"
+# Default Ollama vision model and server endpoint. Pull/tags URLs are derived
+# from the generate URL.
+DEFAULT_LOCAL_MODEL = "qwen2.5vl:7b"
 DEFAULT_OLLAMA_GENERATE_URL = "http://localhost:11434/api/generate"
+
+# Context window per request. We send exactly one page at a time: roughly
+# ~1.2k image tokens, ~0.4k of prior_text, and ~0.3k of prompt (~2k in), plus
+# ~1k generated back. 16k leaves several times that as headroom while staying
+# far below the context some vision models default to -- qwen3-vl defaults to
+# 262k, whose KV cache alone reserves tens of GB and pushes a 64GB machine into
+# swap. Raise this only for pages that genuinely overflow it.
+DEFAULT_NUM_CTX = 16384
+
+# Output budget per page. Reasoning models (qwen3-vl and friends) spend this
+# same budget on their chain of thought before answering, and thinking cannot
+# reliably be turned off -- `think: false` and a `/no_think` prompt are both
+# ignored. At 4096 they exhaust the budget mid-thought and return an empty
+# page; 8192 leaves room to think *and* transcribe. Observed generation settles
+# around 4.3-4.6k tokens even when given more, so this is headroom, not a
+# target, and non-reasoning models stop well short of it and pay nothing.
+DEFAULT_NUM_PREDICT = 8192
+
+# Per-request ceiling. A large page on a small GPU is slow but not unbounded;
+# without a timeout an unresponsive server would hang the run indefinitely.
+DEFAULT_REQUEST_TIMEOUT = 600.0
+
+# Local models often wrap a whole page of markdown in a ```markdown fence, which
+# would render the page as a literal code block. Matches a fence that opens the
+# text (with an optional language tag) and closes it on the final line.
+_WRAPPING_FENCE_RE = re.compile(
+    r"\A```[a-zA-Z0-9_+-]*[ \t]*\r?\n(?P<body>.*?)\r?\n?```[ \t]*\Z",
+    re.DOTALL,
+)
+
+
+def strip_wrapping_code_fence(text: str) -> str:
+    """Unwrap page text that a model enclosed in a single fenced code block.
+
+    Only an outer fence that spans the entire page is removed, so genuine code
+    blocks inside a page are left untouched.
+
+    Args:
+        text: Raw page text returned by the model.
+
+    Returns:
+        The text with a whole-page wrapping fence removed, otherwise unchanged.
+    """
+    match = _WRAPPING_FENCE_RE.match(text.strip())
+    return match.group("body").strip() if match else text
 
 
 def _server_root(generate_url: str) -> str:
@@ -54,15 +97,6 @@ def _pull_url(generate_url: str) -> str:
 def _tags_url(generate_url: str) -> str:
     """Return the Ollama ``/api/tags`` endpoint derived from a generate URL."""
     return f"{_server_root(generate_url)}/api/tags"
-
-
-def is_ollama_ocr_available() -> bool:
-    """Return True when the optional ``ollama-ocr`` package is importable."""
-    try:
-        import ollama_ocr  # noqa: F401  pylint: disable=import-outside-toplevel
-    except Exception:  # pragma: no cover - import failure path
-        return False
-    return True
 
 
 def is_ollama_running(
@@ -120,7 +154,7 @@ def ensure_ollama_model(
     model is already installed this returns quickly without downloading.
 
     Args:
-        model: Ollama model tag, e.g. ``llama3.2-vision:11b``.
+        model: Ollama model tag, e.g. ``qwen2.5vl:7b``.
         generate_url: Ollama generate endpoint (host is reused for pull/tags).
         verbose: Print progress messages while pulling.
 
@@ -200,62 +234,39 @@ def ensure_ollama_model(
 
 
 class LocalOllamaProvider(BaseProvider):
-    """Vision provider backed by Ollama-OCR running against a local Ollama server.
+    """Vision provider that talks to a local Ollama server over its HTTP API.
 
     Implements the same ``process_vision`` contract as the cloud providers so
-    it drops straight into ``VisionExtractor``. Each call writes the page image
-    to a temporary file and hands it to Ollama-OCR's ``OCRProcessor``, which
-    performs the on-device transcription. Token usage and cost are reported as
-    zero because local inference is free.
+    it drops straight into ``VisionExtractor``. Cost is always zero because
+    inference is local, but token counts are reported from what Ollama returns.
     """
 
     def __init__(
         self,
         model_name: str = DEFAULT_LOCAL_MODEL,
         base_url: str = DEFAULT_OLLAMA_GENERATE_URL,
-        language: str = "en",
+        num_ctx: int = DEFAULT_NUM_CTX,
+        num_predict: int = DEFAULT_NUM_PREDICT,
+        timeout: float = DEFAULT_REQUEST_TIMEOUT,
     ):
         """Initialize the local provider.
 
         Args:
             model_name: Ollama vision model tag to run.
-            base_url: Ollama generate endpoint used by Ollama-OCR.
-            language: Language hint passed through to Ollama-OCR.
+            base_url: Ollama generate endpoint to post to.
+            num_ctx: Context window in tokens. Sized for a single page; see
+                DEFAULT_NUM_CTX for why the model default is not used.
+            num_predict: Output token budget per page. Supersedes the caller's
+                ``max_tokens``; see DEFAULT_NUM_PREDICT for why reasoning
+                models need their own budget.
+            timeout: Per-request timeout in seconds. A local page can take a
+                while, but an unbounded wait would hang the run outright.
         """
         self.model_name = model_name
         self.base_url = base_url
-        self.language = language
-        self._processor = None
-        self._processor_lock = threading.Lock()
-
-    def _get_processor(self):
-        """Lazily construct and cache the Ollama-OCR ``OCRProcessor``.
-
-        Returns:
-            An ``OCRProcessor`` instance bound to this provider's model/URL.
-
-        Raises:
-            ImportError: If the optional ``ollama-ocr`` package is missing.
-        """
-        if self._processor is None:
-            with self._processor_lock:
-                if self._processor is None:
-                    try:
-                        from ollama_ocr import (  # pylint: disable=import-outside-toplevel
-                            OCRProcessor,
-                        )
-                    except Exception as error:  # pragma: no cover
-                        raise ImportError(
-                            "The 'ollama-ocr' package is required for --local. "
-                            "Install it with `pip install \".[local]\"` or "
-                            "`pip install ollama-ocr`. See "
-                            "https://github.com/imanoop7/Ollama-OCR"
-                        ) from error
-                    self._processor = OCRProcessor(
-                        model_name=self.model_name,
-                        base_url=self.base_url,
-                    )
-        return self._processor
+        self.num_ctx = num_ctx
+        self.num_predict = num_predict
+        self.timeout = timeout
 
     def process_vision(
         self,
@@ -265,48 +276,83 @@ class LocalOllamaProvider(BaseProvider):
         model: str = "",
         max_tokens: int = 4096,
     ) -> VisionResult:
-        """Transcribe a page image with the local Ollama-OCR engine.
+        """Transcribe a page image with a local Ollama vision model.
 
         Args:
             image_base64: Base64-encoded JPEG of the page.
-            prompt: Instruction prompt (reused as Ollama-OCR ``custom_prompt``).
+            prompt: Instruction prompt for the model.
             prior_text: Optional first-pass digital text for context.
             model: Ignored; the model is fixed at construction time.
-            max_tokens: Ignored; Ollama controls its own output length.
+            max_tokens: Floor for the output budget. The provider's own
+                ``num_predict`` wins when it is larger, since a reasoning model
+                needs room to think before it transcribes.
 
         Returns:
-            VisionResult with the transcribed markdown and zero-cost usage.
+            VisionResult with the transcribed markdown and zero-cost usage,
+            carrying the token counts Ollama reported.
+
+        Raises:
+            RuntimeError: If the server is unreachable, returns an error, or
+                replies with an unusable body, so the caller's retry and
+                failed-page tracking engage rather than a bad page being
+                written into the document.
         """
+        import requests  # pylint: disable=import-outside-toplevel
+
         full_prompt = prompt
         if prior_text:
-            full_prompt = (
-                f"{prompt}\n\n<prior_text>\n{prior_text}\n</prior_text>"
-            )
+            full_prompt = f"{prompt}\n\n<prior_text>\n{prior_text}\n</prior_text>"
 
-        processor = self._get_processor()
+        payload = {
+            "model": self.model_name,
+            "prompt": full_prompt,
+            "images": [image_base64],
+            "stream": False,
+            "options": {
+                "num_ctx": self.num_ctx,
+                "num_predict": max(self.num_predict, max_tokens),
+            },
+        }
 
-        # Ollama-OCR operates on file paths, so materialize the image briefly.
-        image_bytes = base64.b64decode(image_base64)
-        tmp_path = None
         try:
-            with tempfile.NamedTemporaryFile(
-                suffix=".jpg", delete=False
-            ) as tmp_file:
-                tmp_file.write(image_bytes)
-                tmp_path = tmp_file.name
-
-            text = processor.process_image(
-                image_path=tmp_path,
-                format_type="markdown",
-                preprocess=False,
-                custom_prompt=full_prompt,
-                language=self.language,
+            response = requests.post(
+                self.base_url, json=payload, timeout=self.timeout
             )
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+            response.raise_for_status()
+            data = response.json()
+        except Exception as error:
+            raise RuntimeError(
+                f"Ollama request failed for model '{self.model_name}' at "
+                f"{self.base_url}: {error}"
+            ) from error
+
+        if data.get("error"):
+            raise RuntimeError(
+                f"Ollama returned an error for model '{self.model_name}': "
+                f"{data['error']}"
+            )
+
+        text = data.get("response", "")
+
+        # A reasoning model that spends its whole budget thinking returns
+        # done_reason="length" with little or no answer. That would otherwise
+        # land in the document as a silently blank page, so fail loudly and
+        # name the flag that fixes it.
+        if data.get("done_reason") == "length" and not text.strip():
+            raise RuntimeError(
+                f"Model '{self.model_name}' hit its output budget "
+                f"({max(self.num_predict, max_tokens)} tokens) without "
+                "returning any text. Reasoning models spend this budget "
+                "thinking before they answer; raise --local-num-predict (and "
+                "--local-num-ctx to fit it), or use a non-reasoning vision "
+                "model such as qwen2.5vl:7b."
+            )
 
         return VisionResult(
-            text=text or "",
-            usage=TokenUsage(input_tokens=0, output_tokens=0, cost_usd=0.0),
+            text=strip_wrapping_code_fence(text) if text else "",
+            usage=TokenUsage(
+                input_tokens=data.get("prompt_eval_count", 0) or 0,
+                output_tokens=data.get("eval_count", 0) or 0,
+                cost_usd=0.0,
+            ),
         )
