@@ -212,12 +212,18 @@ To utilize additional options:
 - `-s`, `--single`: Process files sequentially instead of in parallel when using `-r`.
 - `-p`, `--parallel [N]`: Max parallel pages to process with VisionExtractor (default: 10). Controls how many pages are processed concurrently.
 - `-d`, `--debug`: Enable debug logging for page processing order. Useful for diagnosing page ordering issues.
-- `--extractor <extractor>`: Extraction method: `vision` (default, LLM-based) or `llamaparse` (LlamaCloud API).
+- `--extractor <extractor>`: Extraction method: `vision` (default, LLM-based) or `llamaparse` (LlamaCloud API). Ignored when `--local` is set.
+- `--local`: Run OCR fully offline against a local [Ollama](https://ollama.com) server. No API keys and no per-token cost.
+- `--local-model <tag>`: Ollama vision model tag to use with `--local` and as the local entry in `--benchmark` (default: `qwen2.5vl:7b`).
+- `--ollama-url <url>`: Ollama generate endpoint for `--local` / local benchmark models (default: `http://localhost:11434/api/generate`).
 - `--llamaparse-tier <tier>`: LlamaParse processing tier (only with `--extractor llamaparse`): `fast`, `cost_effective`, `agentic` (default), `agentic_plus`.
 - `--language <lang>`: Document language code for LlamaParse (default: `en`).
+- `--benchmark`: Benchmark and compare the top model from each provider (OpenAI, Anthropic, and Local) on the same PDF, then exit. Runs models in parallel and streams progress. The local model may download weights on first run.
+- `--benchmark-models <list>`: Comma-separated override for `--benchmark`, e.g. `gpt-5.5,claude-opus-4.6,local`. Use `local` or `local:<model>` for an Ollama model; other entries are `models.json` keys.
+- `--benchmark-reference <label>`: Model label used as the baseline in the `--benchmark` HTML comparison; every other model is diffed against it and it is shown first. Defaults to the first benchmarked model. Remaining models are ordered cheapest-first.
 - `--benchmark-digital-text-parsers`: Run a direct package benchmark (no LLM calls) comparing pypdf and PyMuPDF digital text parsers, then exit.
 - `--benchmark-runs <N>`: Number of benchmark runs per parser (default: `10`).
-- `--benchmark-pdf <path>`: Optional PDF override for benchmark mode. If omitted, benchmark uses generated fixture PDFs from `tests/fixtures`.
+- `--benchmark-pdf <path>`: Optional PDF override for benchmark modes. If omitted, `--benchmark-digital-text-parsers` and `--benchmark` use generated fixture PDFs from `tests/fixtures`.
 
 **Available Models** (defined in `models.json`):
 - `gpt-5.5` - OpenAI GPT-5.5 (default)
@@ -274,6 +280,21 @@ To utilize additional options:
 # Use LlamaParse for non-English documents
 ./pdf_to_md.py document.pdf --extractor llamaparse --language de
 
+# Run fully offline against a local Ollama server (no API keys)
+./pdf_to_md.py document.pdf --local
+
+# Use a different local model
+./pdf_to_md.py document.pdf --local --local-model granite3.2-vision
+
+# Point at an Ollama server on another host
+./pdf_to_md.py document.pdf --local --ollama-url http://192.168.1.10:11434/api/generate
+
+# Benchmark the top OpenAI, Anthropic, and Local models on one PDF (parallel)
+./pdf_to_md.py document.pdf --benchmark
+
+# Benchmark a custom set of models
+./pdf_to_md.py --benchmark --benchmark-models "gpt-5.5,claude-opus-4.6,local:llava" --benchmark-pdf document.pdf
+
 # Force pypdf digital text parser
 ./pdf_to_md.py document.pdf --digital-text-parser pypdf
 
@@ -307,6 +328,112 @@ LlamaParse tiers:
 - `cost_effective` - Budget-friendly for standard documents
 - `agentic` - Balanced accuracy and speed (default)
 - `agentic_plus` - Maximum fidelity for complex layouts
+
+**Local extraction (`--local`):** Runs OCR fully offline against a local
+[Ollama](https://ollama.com) server. No API keys and no per-token cost — your
+documents never leave the machine. It reuses the same page-by-page parallel
+pipeline as vision extraction (including `vt` first-pass digital text), just
+swapping the cloud provider for a local Ollama vision model. No extra Python
+dependency is needed; it talks to Ollama's HTTP API directly.
+
+Setup:
+
+```bash
+# 1. Install Ollama (https://ollama.com) and start the server
+ollama serve
+
+# 2. Run offline (the model is pulled automatically on first use)
+./pdf_to_md.py document.pdf --local
+```
+
+The first run downloads the model weights (`qwen2.5vl:7b` by default, ~6 GB);
+progress is streamed to the console. Choose another Ollama vision model with
+`--local-model` and point at a non-default server with `--ollama-url`.
+
+**Choosing a local model.** Pick one built for transcription, and verify it on
+your own documents before trusting it:
+
+- Caption-oriented models (e.g. `moondream`) describe a page instead of
+  transcribing it, and produce unusable output.
+- Reasoning ("thinking") models such as `qwen3-vl` work, but spend most of the
+  per-page output budget on reasoning before answering, so they are several
+  times slower. Thinking cannot be turned off — Ollama accepts `think: false`
+  and a `/no_think` prompt but the model reasons anyway. If one exhausts its
+  budget without answering, the page fails with a message naming the flag to
+  raise, rather than landing in the document as a silently blank page.
+- `llama3.2-vision` no longer loads on current Ollama releases, which dropped
+  its `mllama` architecture.
+
+**Context and output budget.** Both are sized per request, for one page:
+
+- `--local-num-ctx` (default 16384) — the context window. We send ~4-5k tokens
+  per page (page image + `vt` prior text + prompt). This is set explicitly
+  because some vision models default to a very large context: `qwen3-vl`
+  defaults to 262k, whose KV cache alone reserves tens of GB and can push a
+  64 GB machine into swap. At 16384 the same model loads in ~8 GB.
+- `--local-num-predict` (default 8192) — output tokens per page. A
+  non-reasoning model stops well short of this and pays nothing for the
+  headroom. A reasoning model spends it thinking first, so raise it (and
+  `--local-num-ctx` to fit it) if pages fail on their budget.
+
+`num_ctx` must accommodate the input *plus* `num_predict`, so raise them
+together.
+
+### Model benchmark (`--benchmark`)
+
+`--benchmark` runs the **same PDF** through the top model from each provider
+and prints a side-by-side comparison of time, pages, output size, and cost.
+By default it compares:
+
+- **OpenAI** — `gpt-5.5` (requires `OPENAI_API_KEY`)
+- **Anthropic** — `claude-opus-4.6` (requires `ANTHROPIC_API_KEY`)
+- **Local** — `qwen2.5vl:7b` via a local Ollama server
+
+Models run **concurrently** (one worker per model), and each model's own
+extractor processes its pages in parallel, so the benchmark does as much work
+at once as possible. Progress for every model is streamed with a per-model
+`[label]` tag, and the local model's weight download (if needed) is streamed
+as progress too. Any model whose API key is missing, or whose Ollama server is
+unreachable, is reported as **skipped** with the reason rather than failing the
+run.
+
+```bash
+# Compare top OpenAI, Anthropic, and Local models on one PDF
+./pdf_to_md.py document.pdf --benchmark
+
+# No PDF given -> uses a generated fixture PDF
+./pdf_to_md.py --benchmark
+
+# Custom set; write artifacts to ./out instead of ./benchmark_output
+./pdf_to_md.py --benchmark \
+  --benchmark-models "gpt-5.5,claude-opus-4.6,local" \
+  --benchmark-pdf document.pdf -o ./out
+```
+
+#### Benchmark artifacts
+
+Every benchmark run lands its artifacts in `-o <dir>`, or `./benchmark_output`
+when `-o` is omitted:
+
+- `<pdf>.<model>.md` — each model's full markdown, one file per model.
+- `<pdf>.comparison.html` — a scrollable visual comparison.
+
+Open the HTML to judge quality rather than infer it from the summary table. For
+every page it shows the rendered PDF page beside each model's markdown for that
+page, so you can read what each model saw against what it produced:
+
+- The **reference** model leads and is the baseline. Every other model is
+  word-diffed against it: <ins>green</ins> is text only that model produced,
+  <del>red</del> is reference text it missed. Remaining models follow
+  cheapest-first.
+- Choose the baseline with `--benchmark-reference "<label>"` (use the label
+  exactly as it appears in the summary table, e.g. `Local (qwen2.5vl:7b)`).
+  Defaults to the first benchmarked model.
+- Diffs compare **content, not formatting**, so `**Total**` and `Total` do not
+  register as a difference and the highlighting stays readable.
+
+The file is self-contained (page images and CSS are inlined), so it can be
+moved or shared as-is.
 
 ### Provider Selection
 

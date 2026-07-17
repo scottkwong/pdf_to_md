@@ -22,6 +22,9 @@ from tests.test_digital_text_parsers import run_all_tests as run_parser_tests
 from tests.test_pdf_processing import run_all_tests as run_vision_tests
 from tests.test_text_processing import run_all_tests as run_text_tests
 from tests.test_llamaparse import run_all_tests as run_llamaparse_tests
+from tests.test_local_ocr import run_all_tests as run_local_ocr_tests
+from tests.test_benchmark_models import run_all_tests as run_benchmark_model_tests
+from tests.test_benchmark_report import run_all_tests as run_benchmark_report_tests
 
 
 def main():
@@ -41,6 +44,20 @@ def main():
     print("DIGITAL TEXT PARSER TESTS")
     print("=" * 60)
     parser_success = run_parser_tests()
+
+    # Local OCR and benchmark tests are fully mocked, so they belong with the
+    # other suites that run before any API key is required.
+    print("\n" + "=" * 60)
+    print("LOCAL OCR TESTS")
+    print("=" * 60)
+    local_ocr_success = run_local_ocr_tests()
+
+    print("\n" + "=" * 60)
+    print("MODEL BENCHMARK TESTS")
+    print("=" * 60)
+    benchmark_success = (
+        run_benchmark_model_tests() and run_benchmark_report_tests()
+    )
 
     # Check available providers (without validation for speed)
     available = get_available_providers(validate_keys=False)
@@ -92,6 +109,8 @@ def main():
     print("=" * 60)
     print(f"Installation/Setup: {'PASSED' if setup_success else 'FAILED'}")
     print(f"Digital Text Parsers: {'PASSED' if parser_success else 'FAILED'}")
+    print(f"Local OCR: {'PASSED' if local_ocr_success else 'FAILED'}")
+    print(f"Model Benchmark: {'PASSED' if benchmark_success else 'FAILED'}")
     print(f"Text Processing: {'PASSED' if text_success else 'FAILED'}")
     print(f"Vision Processing: {'PASSED' if vision_success else 'FAILED'}")
     print(f"LlamaParse Extraction: {'PASSED' if llamaparse_success else 'FAILED'}")
@@ -100,6 +119,8 @@ def main():
     if (
         setup_success
         and parser_success
+        and local_ocr_success
+        and benchmark_success
         and text_success
         and vision_success
         and llamaparse_success
