@@ -14,6 +14,7 @@ from benchmark_models import (  # noqa: E402
     BenchmarkModelSpec,
     _precheck_api_spec,
     _precheck_local_spec,
+    _precheck_vllm_spec,
     _resolve_api_routing,
     default_benchmark_specs,
     parse_benchmark_specs,
@@ -40,6 +41,34 @@ def test_parse_specs_handles_local_variants() -> None:
     assert specs[0].kind == "api" and specs[0].model == "gpt-5.5"
     assert specs[1].kind == "local" and specs[1].model == "qwen2.5vl:7b"
     assert specs[2].kind == "local" and specs[2].model == "granite3.2-vision"
+
+
+def test_parse_specs_handles_vllm_variants() -> None:
+    """parse_benchmark_specs recognizes vllm and vllm:<model> entries."""
+    specs = parse_benchmark_specs(
+        "gpt-5.5, vllm, vllm:my-parser",
+        vllm_model="kdl-frontier-parser-nano",
+        vllm_url="http://localhost:8000/v1",
+    )
+    assert specs[0].kind == "api" and specs[0].model == "gpt-5.5"
+    assert specs[1].kind == "vllm"
+    assert specs[1].model == "kdl-frontier-parser-nano"
+    assert specs[1].vllm_url == "http://localhost:8000/v1"
+    assert specs[2].kind == "vllm" and specs[2].model == "my-parser"
+
+
+def test_vllm_precheck_skips_when_server_unavailable() -> None:
+    """A vllm spec is skipped with a reason when no server is reachable."""
+    spec = BenchmarkModelSpec(
+        label="vllm", kind="vllm", model="kdl-frontier-parser-nano"
+    )
+    with mock.patch("benchmark_models.is_vllm_running", return_value=False):
+        reason = _precheck_vllm_spec(spec)
+    assert reason is not None
+    assert "vLLM server" in reason
+
+    with mock.patch("benchmark_models.is_vllm_running", return_value=True):
+        assert _precheck_vllm_spec(spec) is None
 
 
 def test_default_local_model_is_a_transcription_model() -> None:
@@ -144,6 +173,8 @@ def run_all_tests() -> bool:
     """Run benchmark spec tests directly."""
     test_default_specs_cover_three_providers()
     test_parse_specs_handles_local_variants()
+    test_parse_specs_handles_vllm_variants()
+    test_vllm_precheck_skips_when_server_unavailable()
     test_parse_specs_rejects_empty()
     test_api_precheck_skips_unknown_model()
     test_api_precheck_skips_when_no_key()

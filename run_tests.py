@@ -23,6 +23,7 @@ from tests.test_pdf_processing import run_all_tests as run_vision_tests
 from tests.test_text_processing import run_all_tests as run_text_tests
 from tests.test_llamaparse import run_all_tests as run_llamaparse_tests
 from tests.test_local_ocr import run_all_tests as run_local_ocr_tests
+from tests.test_vllm_ocr import run_all_tests as run_vllm_ocr_tests
 from tests.test_benchmark_models import run_all_tests as run_benchmark_model_tests
 from tests.test_benchmark_report import run_all_tests as run_benchmark_report_tests
 
@@ -50,7 +51,7 @@ def main():
     print("\n" + "=" * 60)
     print("LOCAL OCR TESTS")
     print("=" * 60)
-    local_ocr_success = run_local_ocr_tests()
+    local_ocr_success = run_local_ocr_tests() and run_vllm_ocr_tests()
 
     print("\n" + "=" * 60)
     print("MODEL BENCHMARK TESTS")

@@ -67,10 +67,14 @@ def create_extractor(
     language: str = "en",
     verbose: bool = False,
     max_parallel_pages: int = 10,
+    local_backend: str = "ollama",
     local_model: str = "qwen2.5vl:7b",
     ollama_url: str = "http://localhost:11434/api/generate",
     local_num_ctx: int = 16384,
     local_num_predict: int = 8192,
+    vllm_model: str = "kdl-frontier-parser-nano",
+    vllm_url: str = "http://localhost:8000/v1",
+    vllm_max_tokens: int = 4096,
 ) -> "BaseExtractor":
     """
     Create appropriate extractor based on type.
@@ -86,10 +90,18 @@ def create_extractor(
         language: Document language for LlamaParse extractor.
         verbose: Enable verbose logging.
         max_parallel_pages: Max pages to process in parallel (VisionExtractor).
-        local_model: Ollama model tag for the local extractor.
-        ollama_url: Ollama generate endpoint for the local extractor.
-        local_num_ctx: Context window in tokens for the local extractor.
-        local_num_predict: Output token budget per page for the local extractor.
+        local_backend: Local runtime for the 'local' extractor: 'ollama'
+            (default) or 'vllm' (OpenAI-compatible server, e.g. for
+            KDL-Frontier-Parser-nano).
+        local_model: Ollama model tag for the local (ollama) extractor.
+        ollama_url: Ollama generate endpoint for the local (ollama) extractor.
+        local_num_ctx: Context window in tokens for the local (ollama) extractor.
+        local_num_predict: Output token budget per page for the local (ollama)
+            extractor.
+        vllm_model: Served-model name for the local (vllm) extractor.
+        vllm_url: vLLM OpenAI-compatible base URL for the local (vllm) extractor.
+        vllm_max_tokens: Output token budget per page for the local (vllm)
+            extractor.
 
     Returns:
         Configured BaseExtractor instance.
@@ -102,8 +114,29 @@ def create_extractor(
             verbose=verbose,
         )
     elif extractor_type == "local":
-        # Offline extraction against a locally running Ollama server.
         from extractors import VisionExtractor
+
+        if local_backend == "vllm":
+            # Offline extraction against a locally running vLLM OpenAI-compatible
+            # server (e.g. serving KDL-Frontier-Parser-nano).
+            from vllm_ocr import VllmOpenAIProvider, ensure_vllm_server
+
+            # Verify the server is up and serving the model before any pages run.
+            ensure_vllm_server(vllm_model, vllm_url, verbose=True)
+            provider = VllmOpenAIProvider(
+                model_name=vllm_model,
+                base_url=vllm_url,
+                max_tokens=vllm_max_tokens,
+            )
+            return VisionExtractor(
+                provider=provider,
+                model_id=vllm_model,
+                mode=mode,
+                max_parallel_pages=max_parallel_pages,
+                digital_text_parser=digital_text_parser,
+            )
+
+        # Offline extraction against a locally running Ollama server.
         from local_ocr import LocalOllamaProvider, ensure_ollama_model
 
         # Pull the model up front so weights download with visible progress
@@ -255,10 +288,16 @@ def print_cli_configuration(args: argparse.Namespace, model: str) -> None:
     effective_extractor = "local" if args.local else args.extractor
     print(f"  Extractor:          {effective_extractor}")
     if args.local:
-        print(f"  Local model:        {args.local_model}")
-        print(f"  Ollama URL:         {args.ollama_url}")
-        print(f"  Context window:     {args.local_num_ctx} tokens")
-        print(f"  Output budget:      {args.local_num_predict} tokens/page")
+        print(f"  Local backend:      {args.local_backend}")
+        if args.local_backend == "vllm":
+            print(f"  vLLM model:         {args.vllm_model}")
+            print(f"  vLLM URL:           {args.vllm_url}")
+            print(f"  Output budget:      {args.vllm_max_tokens} tokens/page")
+        else:
+            print(f"  Local model:        {args.local_model}")
+            print(f"  Ollama URL:         {args.ollama_url}")
+            print(f"  Context window:     {args.local_num_ctx} tokens")
+            print(f"  Output budget:      {args.local_num_predict} tokens/page")
         print(f"  Mode:               {args.mode}")
         print(f"  Digital parser:     {args.digital_text_parser}")
         print(f"  Parallel pages:     {args.parallel}")
@@ -596,15 +635,45 @@ def main() -> None:
         "--local",
         action="store_true",
         default=False,
-        help="Run OCR fully offline against a local Ollama server. No API "
+        help="Run OCR fully offline against a local model server. No API "
         "keys or per-token cost.",
+    )
+    parser.add_argument(
+        "--local-backend",
+        type=str,
+        choices=["ollama", "vllm"],
+        default="ollama",
+        help="Local runtime used with --local: 'ollama' (default) or 'vllm' "
+        "(an OpenAI-compatible vLLM server, e.g. for KDL-Frontier-Parser-nano).",
     )
     parser.add_argument(
         "--local-model",
         type=str,
         default="qwen2.5vl:7b",
-        help="Ollama vision model tag to use with --local and as the local "
-        "entry in --benchmark (default: qwen2.5vl:7b).",
+        help="Ollama vision model tag to use with --local --local-backend "
+        "ollama and as the local entry in --benchmark (default: qwen2.5vl:7b).",
+    )
+    parser.add_argument(
+        "--vllm-model",
+        type=str,
+        default="kdl-frontier-parser-nano",
+        help="Served-model name to request from the vLLM server with "
+        "--local --local-backend vllm (default: kdl-frontier-parser-nano).",
+    )
+    parser.add_argument(
+        "--vllm-url",
+        type=str,
+        default="http://localhost:8000/v1",
+        help="vLLM OpenAI-compatible base URL for --local --local-backend vllm "
+        "/ 'vllm' benchmark entries (default: http://localhost:8000/v1).",
+    )
+    parser.add_argument(
+        "--vllm-max-tokens",
+        type=int,
+        default=4096,
+        help="Output token budget per page for --local --local-backend vllm / "
+        "'vllm' benchmark entries (default: 4096). Keep it below the server's "
+        "--max-model-len minus the page image and prompt.",
     )
     parser.add_argument(
         "--ollama-url",
@@ -765,6 +834,9 @@ def main() -> None:
                 prefer_openrouter=prefer_openrouter,
                 num_ctx=args.local_num_ctx,
                 num_predict=args.local_num_predict,
+                vllm_model=args.vllm_model,
+                vllm_url=args.vllm_url,
+                vllm_max_tokens=args.vllm_max_tokens,
             )
         else:
             specs = default_benchmark_specs(
@@ -845,17 +917,26 @@ def main() -> None:
                 language=args.language,
                 verbose=args.verbose,
                 max_parallel_pages=args.parallel,
+                local_backend=args.local_backend,
                 local_model=args.local_model,
                 ollama_url=args.ollama_url,
                 local_num_ctx=args.local_num_ctx,
                 local_num_predict=args.local_num_predict,
+                vllm_model=args.vllm_model,
+                vllm_url=args.vllm_url,
+                vllm_max_tokens=args.vllm_max_tokens,
             )
+            backend_label = "vLLM" if args.local_backend == "vllm" else "Ollama"
             print("=" * 70)
-            print("Local OCR Configuration (Ollama):")
+            print(f"Local OCR Configuration ({backend_label}):")
             print("=" * 70)
             print(f"  Extractor:          {extractor.name}")
-            print(f"  Local model:        {args.local_model}")
-            print(f"  Ollama URL:         {args.ollama_url}")
+            if args.local_backend == "vllm":
+                print(f"  vLLM model:         {args.vllm_model}")
+                print(f"  vLLM URL:           {args.vllm_url}")
+            else:
+                print(f"  Local model:        {args.local_model}")
+                print(f"  Ollama URL:         {args.ollama_url}")
             print(f"  Mode:               {args.mode}")
             print("=" * 70)
             print()

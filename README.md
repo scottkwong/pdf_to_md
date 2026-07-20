@@ -213,13 +213,17 @@ To utilize additional options:
 - `-p`, `--parallel [N]`: Max parallel pages to process with VisionExtractor (default: 10). Controls how many pages are processed concurrently.
 - `-d`, `--debug`: Enable debug logging for page processing order. Useful for diagnosing page ordering issues.
 - `--extractor <extractor>`: Extraction method: `vision` (default, LLM-based) or `llamaparse` (LlamaCloud API). Ignored when `--local` is set.
-- `--local`: Run OCR fully offline against a local [Ollama](https://ollama.com) server. No API keys and no per-token cost.
-- `--local-model <tag>`: Ollama vision model tag to use with `--local` and as the local entry in `--benchmark` (default: `qwen2.5vl:7b`).
-- `--ollama-url <url>`: Ollama generate endpoint for `--local` / local benchmark models (default: `http://localhost:11434/api/generate`).
+- `--local`: Run OCR fully offline against a local model server. No API keys and no per-token cost.
+- `--local-backend <backend>`: Local runtime used with `--local`: `ollama` (default) or `vllm` (an OpenAI-compatible vLLM server, e.g. for [KDL-Frontier-Parser-nano](https://huggingface.co/KDLAI/KDL-Frontier-Parser-nano)).
+- `--local-model <tag>`: Ollama vision model tag to use with `--local --local-backend ollama` and as the local entry in `--benchmark` (default: `qwen2.5vl:7b`).
+- `--ollama-url <url>`: Ollama generate endpoint for `--local --local-backend ollama` / local benchmark models (default: `http://localhost:11434/api/generate`).
+- `--vllm-model <name>`: Served-model name to request from the vLLM server with `--local --local-backend vllm` (default: `kdl-frontier-parser-nano`).
+- `--vllm-url <url>`: vLLM OpenAI-compatible base URL for `--local --local-backend vllm` / `vllm` benchmark entries (default: `http://localhost:8000/v1`).
+- `--vllm-max-tokens <N>`: Output token budget per page for `--local --local-backend vllm` / `vllm` benchmark entries (default: `4096`). Keep it below the server's `--max-model-len` minus the page image and prompt.
 - `--llamaparse-tier <tier>`: LlamaParse processing tier (only with `--extractor llamaparse`): `fast`, `cost_effective`, `agentic` (default), `agentic_plus`.
 - `--language <lang>`: Document language code for LlamaParse (default: `en`).
 - `--benchmark`: Benchmark and compare the top model from each provider (OpenAI, Anthropic, and Local) on the same PDF, then exit. Runs models in parallel and streams progress. The local model may download weights on first run.
-- `--benchmark-models <list>`: Comma-separated override for `--benchmark`, e.g. `gpt-5.5,claude-opus-4.6,local`. Use `local` or `local:<model>` for an Ollama model; other entries are `models.json` keys.
+- `--benchmark-models <list>`: Comma-separated override for `--benchmark`, e.g. `gpt-5.5,claude-opus-4.6,local`. Use `local` or `local:<model>` for an Ollama model, `vllm` or `vllm:<model>` for a local vLLM served model (e.g. KDL-Frontier-Parser-nano); other entries are `models.json` keys.
 - `--benchmark-reference <label>`: Model label used as the baseline in the `--benchmark` HTML comparison; every other model is diffed against it and it is shown first. Defaults to the first benchmarked model. Remaining models are ordered cheapest-first.
 - `--benchmark-digital-text-parsers`: Run a direct package benchmark (no LLM calls) comparing pypdf and PyMuPDF digital text parsers, then exit.
 - `--benchmark-runs <N>`: Number of benchmark runs per parser (default: `10`).
@@ -289,6 +293,12 @@ To utilize additional options:
 # Point at an Ollama server on another host
 ./pdf_to_md.py document.pdf --local --ollama-url http://192.168.1.10:11434/api/generate
 
+# Run offline against a local vLLM server serving KDL-Frontier-Parser-nano
+./pdf_to_md.py document.pdf --local --local-backend vllm
+
+# Point at a vLLM server on another host / port
+./pdf_to_md.py document.pdf --local --local-backend vllm --vllm-url http://192.168.1.10:8000/v1
+
 # Benchmark the top OpenAI, Anthropic, and Local models on one PDF (parallel)
 ./pdf_to_md.py document.pdf --benchmark
 
@@ -329,12 +339,22 @@ LlamaParse tiers:
 - `agentic` - Balanced accuracy and speed (default)
 - `agentic_plus` - Maximum fidelity for complex layouts
 
-**Local extraction (`--local`):** Runs OCR fully offline against a local
-[Ollama](https://ollama.com) server. No API keys and no per-token cost — your
-documents never leave the machine. It reuses the same page-by-page parallel
-pipeline as vision extraction (including `vt` first-pass digital text), just
-swapping the cloud provider for a local Ollama vision model. No extra Python
-dependency is needed; it talks to Ollama's HTTP API directly.
+**Local extraction (`--local`):** Runs OCR fully offline against a local model
+server. No API keys and no per-token cost — your documents never leave the
+machine. It reuses the same page-by-page parallel pipeline as vision extraction
+(including `vt` first-pass digital text), just swapping the cloud provider for a
+local model. Two backends are available, selected with `--local-backend`:
+
+- `ollama` (default) — a local [Ollama](https://ollama.com) server running a
+  general vision model (Qwen-VL, LLaVA, Granite Vision, …). Talks to Ollama's
+  HTTP API directly; no extra Python dependency.
+- `vllm` — a local [vLLM](https://docs.vllm.ai) server exposing an
+  OpenAI-compatible API, for purpose-built document-parsing models such as
+  [KDL-Frontier-Parser-nano](https://huggingface.co/KDLAI/KDL-Frontier-Parser-nano).
+  Uses the bundled `openai` client; no extra Python dependency. See
+  [vLLM backend](#vllm-backend-kdl-frontier-parser) below.
+
+#### Ollama backend (default)
 
 Setup:
 
@@ -379,6 +399,49 @@ your own documents before trusting it:
 `num_ctx` must accommodate the input *plus* `num_predict`, so raise them
 together.
 
+#### vLLM backend (KDL-Frontier-Parser)
+
+`--local-backend vllm` targets purpose-built document-parsing VLMs that ship on
+Hugging Face and are served with [vLLM](https://docs.vllm.ai) rather than
+Ollama — in particular
+[KDL-Frontier-Parser-nano](https://huggingface.co/KDLAI/KDL-Frontier-Parser-nano),
+a 1.2B Qwen2-VL-based parser (MinerU 2.5 lineage) tuned for OCR, tables, and
+charts. Like the Ollama backend it plugs into the same parallel page pipeline;
+the app calls the server's OpenAI-compatible `/v1/chat/completions` endpoint
+once per page and never downloads or launches the model itself — the vLLM
+server is started out of band and owns its own GPU memory and model loading.
+
+Setup:
+
+```bash
+# 1. Install vLLM (see https://docs.vllm.ai) — needs a CUDA GPU.
+pip install vllm
+
+# 2. Serve the model (per the model card). The served-model name must match
+#    --vllm-model below (default: kdl-frontier-parser-nano).
+vllm serve KDLAI/KDL-Frontier-Parser-nano \
+  --served-model-name kdl-frontier-parser-nano \
+  --max-model-len 8192 \
+  --gpu-memory-utilization 0.85 \
+  --max-num-seqs 24 \
+  --trust-remote-code \
+  --limit-mm-per-prompt '{"image":1}'
+
+# 3. Convert offline against the running server.
+./pdf_to_md.py document.pdf --local --local-backend vllm
+```
+
+Point at a non-default server with `--vllm-url` (default
+`http://localhost:8000/v1`), request a different served-model name with
+`--vllm-model`, and cap the per-page output with `--vllm-max-tokens` (default
+4096; keep it below the server's `--max-model-len` minus the page image and
+prompt). If the server is unreachable, or is serving a different model name, the
+run stops before any page is processed with a message that names the fix. Each
+page is a single end-to-end pass with greedy decoding, and the model-card
+requirements (`enable_thinking=False`, `skip_special_tokens=False`) are set on
+every request. If the local server is started with `--api-key`, export the same
+value as `VLLM_API_KEY`.
+
 ### Model benchmark (`--benchmark`)
 
 `--benchmark` runs the **same PDF** through the top model from each provider
@@ -408,6 +471,11 @@ run.
 ./pdf_to_md.py --benchmark \
   --benchmark-models "gpt-5.5,claude-opus-4.6,local" \
   --benchmark-pdf document.pdf -o ./out
+
+# Include a local vLLM model (e.g. KDL-Frontier-Parser-nano) in the comparison
+./pdf_to_md.py --benchmark \
+  --benchmark-models "gpt-5.5,local,vllm" \
+  --benchmark-pdf document.pdf
 ```
 
 #### Benchmark artifacts

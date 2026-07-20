@@ -35,6 +35,14 @@ from local_ocr import (
     ensure_ollama_model,
     is_ollama_running,
 )
+from vllm_ocr import (
+    DEFAULT_MAX_TOKENS as DEFAULT_VLLM_MAX_TOKENS,
+    DEFAULT_VLLM_BASE_URL,
+    DEFAULT_VLLM_MODEL,
+    VllmOpenAIProvider,
+    ensure_vllm_server,
+    is_vllm_running,
+)
 
 # Thread-safe console output. Benchmarks run models concurrently, so all
 # progress prints go through this lock to keep lines from interleaving.
@@ -53,12 +61,16 @@ class BenchmarkModelSpec:
 
     Attributes:
         label: Human-readable name shown in progress lines and the report.
-        kind: ``"api"`` for cloud providers or ``"local"`` for Ollama.
-        model: models.json key (api) or Ollama model tag (local).
+        kind: ``"api"`` for cloud providers, ``"local"`` for Ollama, or
+            ``"vllm"`` for a local vLLM OpenAI-compatible server.
+        model: models.json key (api), Ollama model tag (local), or served-model
+            name (vllm).
         prefer_openrouter: Route cloud calls via OpenRouter when available.
         ollama_url: Ollama generate endpoint for local models.
-        num_ctx: Context window in tokens for local models.
-        num_predict: Output token budget per page for local models.
+        num_ctx: Context window in tokens for local (ollama) models.
+        num_predict: Output token budget per page for local (ollama) models.
+        vllm_url: vLLM OpenAI-compatible base URL for vllm models.
+        vllm_max_tokens: Output token budget per page for vllm models.
     """
 
     label: str
@@ -68,6 +80,8 @@ class BenchmarkModelSpec:
     ollama_url: str = DEFAULT_OLLAMA_GENERATE_URL
     num_ctx: int = DEFAULT_NUM_CTX
     num_predict: int = DEFAULT_NUM_PREDICT
+    vllm_url: str = DEFAULT_VLLM_BASE_URL
+    vllm_max_tokens: int = DEFAULT_VLLM_MAX_TOKENS
 
 
 @dataclass
@@ -152,11 +166,15 @@ def parse_benchmark_specs(
     prefer_openrouter: bool = False,
     num_ctx: int = DEFAULT_NUM_CTX,
     num_predict: int = DEFAULT_NUM_PREDICT,
+    vllm_model: str = DEFAULT_VLLM_MODEL,
+    vllm_url: str = DEFAULT_VLLM_BASE_URL,
+    vllm_max_tokens: int = DEFAULT_VLLM_MAX_TOKENS,
 ) -> List[BenchmarkModelSpec]:
     """Parse a comma-separated ``--benchmark-models`` override into specs.
 
-    Each entry is either ``local`` / ``local:<model>`` for an Ollama model, or
-    a models.json key for a cloud model.
+    Each entry is one of ``local`` / ``local:<model>`` for an Ollama model,
+    ``vllm`` / ``vllm:<model>`` for a local vLLM served model, or a models.json
+    key for a cloud model.
 
     Args:
         spec_arg: Comma-separated list of model identifiers.
@@ -165,6 +183,9 @@ def parse_benchmark_specs(
         prefer_openrouter: Whether cloud entries should prefer OpenRouter.
         num_ctx: Context window in tokens for local entries.
         num_predict: Output token budget per page for local entries.
+        vllm_model: Default served-model name when an entry is bare ``vllm``.
+        vllm_url: vLLM OpenAI-compatible base URL for vllm entries.
+        vllm_max_tokens: Output token budget per page for vllm entries.
 
     Returns:
         List of parsed specs, preserving input order.
@@ -200,6 +221,27 @@ def parse_benchmark_specs(
                     ollama_url=ollama_url,
                     num_ctx=num_ctx,
                     num_predict=num_predict,
+                )
+            )
+        elif lowered == "vllm":
+            specs.append(
+                BenchmarkModelSpec(
+                    label=f"vLLM ({vllm_model})",
+                    kind="vllm",
+                    model=vllm_model,
+                    vllm_url=vllm_url,
+                    vllm_max_tokens=vllm_max_tokens,
+                )
+            )
+        elif lowered.startswith("vllm:"):
+            model = entry.split(":", 1)[1].strip() or vllm_model
+            specs.append(
+                BenchmarkModelSpec(
+                    label=f"vLLM ({model})",
+                    kind="vllm",
+                    model=model,
+                    vllm_url=vllm_url,
+                    vllm_max_tokens=vllm_max_tokens,
                 )
             )
         else:
@@ -308,6 +350,20 @@ def _precheck_local_spec(spec: BenchmarkModelSpec) -> Optional[str]:
     return None
 
 
+def _precheck_vllm_spec(spec: BenchmarkModelSpec) -> Optional[str]:
+    """Return a skip reason for a vLLM spec, or None if it can run.
+
+    Args:
+        spec: vLLM model spec to validate.
+
+    Returns:
+        A human-readable skip reason, or None when the spec is runnable.
+    """
+    if not is_vllm_running(spec.vllm_url):
+        return f"no vLLM server reachable at {spec.vllm_url}"
+    return None
+
+
 def _build_extractor(spec: BenchmarkModelSpec, max_parallel_pages: int):
     """Build a configured VisionExtractor for a benchmark spec.
 
@@ -328,6 +384,15 @@ def _build_extractor(spec: BenchmarkModelSpec, max_parallel_pages: int):
             base_url=spec.ollama_url,
             num_ctx=spec.num_ctx,
             num_predict=spec.num_predict,
+        )
+        model_id = spec.model
+    elif spec.kind == "vllm":
+        _log(f"[{spec.label}] checking vLLM server...")
+        ensure_vllm_server(spec.model, spec.vllm_url, verbose=True)
+        provider = VllmOpenAIProvider(
+            model_name=spec.model,
+            base_url=spec.vllm_url,
+            max_tokens=spec.vllm_max_tokens,
         )
         model_id = spec.model
     else:
@@ -362,11 +427,12 @@ def _run_single_benchmark(
         A populated BenchmarkModelResult (status ``ok``, ``skipped``, or
         ``error``).
     """
-    skip_reason = (
-        _precheck_local_spec(spec)
-        if spec.kind == "local"
-        else _precheck_api_spec(spec)
-    )
+    if spec.kind == "local":
+        skip_reason = _precheck_local_spec(spec)
+    elif spec.kind == "vllm":
+        skip_reason = _precheck_vllm_spec(spec)
+    else:
+        skip_reason = _precheck_api_spec(spec)
     if skip_reason:
         _log(f"[{spec.label}] SKIPPED — {skip_reason}")
         return BenchmarkModelResult(
@@ -444,9 +510,9 @@ def benchmark_models(
     """Benchmark several models against the same PDF.
 
     Cloud models run concurrently, since their latency is the remote API's.
-    Local models run one at a time: they share a single GPU, so overlapping
-    them measures contention rather than the model, inflating every local time
-    (observed: 13x) while telling you nothing useful.
+    Local models (Ollama and vLLM alike) run one at a time: they share a single
+    GPU, so overlapping them measures contention rather than the model,
+    inflating every local time (observed: 13x) while telling you nothing useful.
 
     Args:
         specs: Models to benchmark.
@@ -464,7 +530,9 @@ def benchmark_models(
         raise ValueError("At least one model spec is required to benchmark.")
 
     resolved_pdf = _resolve_benchmark_pdf(pdf_path)
-    local_count = sum(1 for s in specs if s.kind == "local")
+    # Ollama and vLLM models both run on the local GPU and must not overlap.
+    gpu_kinds = {"local", "vllm"}
+    local_count = sum(1 for s in specs if s.kind in gpu_kinds)
 
     _log("=" * 70)
     _log("Cross-Provider Model Benchmark")
@@ -488,8 +556,8 @@ def benchmark_models(
             specs[index], resolved_pdf, output_dir, max_parallel_pages
         )
 
-    api_indices = [i for i, s in enumerate(specs) if s.kind != "local"]
-    local_indices = [i for i, s in enumerate(specs) if s.kind == "local"]
+    api_indices = [i for i, s in enumerate(specs) if s.kind not in gpu_kinds]
+    local_indices = [i for i, s in enumerate(specs) if s.kind in gpu_kinds]
 
     # Cloud models overlap freely; the local queue is drained on one worker so
     # only one model occupies the GPU at a time.
