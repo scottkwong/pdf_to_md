@@ -57,6 +57,36 @@ def test_parse_specs_handles_vllm_variants() -> None:
     assert specs[2].kind == "vllm" and specs[2].model == "my-parser"
 
 
+def test_parse_specs_handles_unlimited_variants() -> None:
+    """parse_benchmark_specs recognizes unlimited and unlimited:<model>."""
+    specs = parse_benchmark_specs(
+        "local, vllm, unlimited, unlimited:my-ocr",
+        local_model="qwen2.5vl:7b",
+        vllm_model="kdl-frontier-parser-nano",
+        vllm_url="http://localhost:8000/v1",
+        unlimited_model="unlimited-ocr",
+        unlimited_url="http://localhost:8001/v1",
+    )
+    assert [s.kind for s in specs] == ["local", "vllm", "unlimited", "unlimited"]
+    # KDL and Unlimited-OCR default to separate servers/ports.
+    assert specs[1].vllm_url == "http://localhost:8000/v1"
+    assert specs[2].model == "unlimited-ocr"
+    assert specs[2].vllm_url == "http://localhost:8001/v1"
+    assert specs[3].model == "my-ocr"
+
+
+def test_unlimited_precheck_shares_vllm_reachability() -> None:
+    """An unlimited spec is skipped/allowed by the same vLLM reachability check."""
+    spec = BenchmarkModelSpec(
+        label="unlimited", kind="unlimited", model="unlimited-ocr"
+    )
+    with mock.patch("benchmark_models.is_vllm_running", return_value=False):
+        reason = _precheck_vllm_spec(spec)
+    assert reason is not None and "vLLM server" in reason
+    with mock.patch("benchmark_models.is_vllm_running", return_value=True):
+        assert _precheck_vllm_spec(spec) is None
+
+
 def test_vllm_precheck_skips_when_server_unavailable() -> None:
     """A vllm spec is skipped with a reason when no server is reachable."""
     spec = BenchmarkModelSpec(
@@ -174,6 +204,8 @@ def run_all_tests() -> bool:
     test_default_specs_cover_three_providers()
     test_parse_specs_handles_local_variants()
     test_parse_specs_handles_vllm_variants()
+    test_parse_specs_handles_unlimited_variants()
+    test_unlimited_precheck_shares_vllm_reachability()
     test_vllm_precheck_skips_when_server_unavailable()
     test_parse_specs_rejects_empty()
     test_api_precheck_skips_unknown_model()

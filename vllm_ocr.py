@@ -34,6 +34,7 @@ three are set on every request below.
 from __future__ import annotations
 
 import os
+import re
 from typing import List, Optional
 
 from llm_providers import BaseProvider, TokenUsage, VisionResult
@@ -53,6 +54,57 @@ DEFAULT_MAX_TOKENS = 4096
 # Per-request ceiling. A large page on a small GPU is slow but not unbounded;
 # without a timeout an unresponsive server would hang the run indefinitely.
 DEFAULT_REQUEST_TIMEOUT = 600.0
+
+# ---------------------------------------------------------------------------
+# Baidu Unlimited-OCR (DeepSeek-OCR lineage) defaults.
+#
+# Unlimited-OCR is a separate vLLM-served model. It is a distinct model per
+# server, so it defaults to its own port (8001) rather than sharing KDL's 8000
+# -- on one GPU you run KDL and Unlimited-OCR as two servers. Its 32k context
+# fits long pages, so its per-page output budget is larger than KDL's.
+DEFAULT_UNLIMITED_MODEL = "unlimited-ocr"
+DEFAULT_UNLIMITED_BASE_URL = "http://localhost:8001/v1"
+DEFAULT_UNLIMITED_MAX_TOKENS = 8192
+
+# Unlimited-OCR has no chat template and is trained for a fixed recipe: the
+# prompt must begin with a literal <image> placeholder, and <|grounding|> asks
+# for a document-to-markdown pass. A generic "write markdown" instruction (or a
+# missing <image>) makes the model return empty output, so this prompt is used
+# verbatim and the caller's prompt is ignored.
+DEFAULT_UNLIMITED_OCR_PROMPT = "<image>\n<|grounding|>Convert the document to markdown."
+
+
+# Grounding markup emitted by DeepSeek-OCR-lineage models: <|ref|>text<|/ref|>
+# wraps a span of content and <|det|>[[x,y,...]]<|/det|> carries its pixel box.
+_DET_BLOCK_RE = re.compile(r"<\|det\|>.*?<\|/det\|>", re.DOTALL)
+_REF_WRAP_RE = re.compile(r"<\|ref\|>(.*?)<\|/ref\|>", re.DOTALL)
+_LEFTOVER_GROUNDING_RE = re.compile(r"<\|/?(?:ref|det|grounding)\|>")
+
+
+def strip_grounding_tokens(text: str) -> str:
+    """Turn Unlimited-OCR's grounded output into clean markdown.
+
+    DeepSeek-OCR-lineage models interleave the transcription with grounding
+    markup: ``<|ref|>span<|/ref|>`` wraps a piece of content and
+    ``<|det|>[[x1,y1,x2,y2]]<|/det|>`` gives its bounding box. The boxes are
+    coordinates, not document content, so they are dropped; the ``<|ref|>``
+    wrappers are unwrapped to keep the text they enclose.
+
+    Args:
+        text: Raw model output, possibly carrying grounding markup.
+
+    Returns:
+        The text with coordinate boxes removed, reference spans unwrapped, and
+        any stray grounding markers cleaned up.
+    """
+    # Drop coordinate boxes first so their contents can't survive as stray text.
+    text = _DET_BLOCK_RE.sub("", text)
+    # Unwrap reference spans, keeping the enclosed content.
+    text = _REF_WRAP_RE.sub(r"\1", text)
+    # Remove the grounding marker and any unpaired ref/det tags left behind.
+    text = text.replace("<|grounding|>", "")
+    text = _LEFTOVER_GROUNDING_RE.sub("", text)
+    return text.strip()
 
 
 def _models_url(base_url: str) -> str:
@@ -115,6 +167,8 @@ def ensure_vllm_server(
     model: str,
     base_url: str = DEFAULT_VLLM_BASE_URL,
     verbose: bool = True,
+    url_flag: str = "--vllm-url",
+    model_flag: str = "--vllm-model",
 ) -> None:
     """Verify a vLLM server is reachable and serving the requested model.
 
@@ -127,6 +181,8 @@ def ensure_vllm_server(
         model: Served-model name expected on the server.
         base_url: vLLM OpenAI base URL.
         verbose: Print a confirmation line when the model is found.
+        url_flag: CLI flag named in the "unreachable" message.
+        model_flag: CLI flag named in the "wrong model" message.
 
     Raises:
         RuntimeError: If the server is unreachable or is not serving ``model``.
@@ -134,9 +190,9 @@ def ensure_vllm_server(
     if not is_vllm_running(base_url):
         raise RuntimeError(
             f"Could not reach a vLLM server at {base_url}. Start one with "
-            "`vllm serve KDLAI/KDL-Frontier-Parser-nano --served-model-name "
-            f"{DEFAULT_VLLM_MODEL} --trust-remote-code --limit-mm-per-prompt "
-            "'{\"image\":1}'`, or point --vllm-url at a running server."
+            f"`vllm serve <model-repo> --served-model-name {model}` (see the "
+            f"README for the full command), or point {url_flag} at a running "
+            "server."
         )
 
     served = list_served_vllm_models(base_url)
@@ -144,7 +200,7 @@ def ensure_vllm_server(
         raise RuntimeError(
             f"vLLM server at {base_url} is running but does not serve a model "
             f"named '{model}'. It is serving: {', '.join(served)}. Pass the "
-            "right name with --vllm-model, or restart the server with "
+            f"right name with {model_flag}, or restart the server with "
             f"--served-model-name {model}."
         )
 
@@ -221,9 +277,8 @@ class VllmOpenAIProvider(BaseProvider):
                 failed-page tracking engage rather than a bad page being
                 written into the document.
         """
-        full_prompt = prompt
-        if prior_text:
-            full_prompt = f"{prompt}\n\n<prior_text>\n{prior_text}\n</prior_text>"
+        full_prompt = self._build_prompt(prompt, prior_text)
+        budget = max(self.max_tokens, max_tokens)
 
         try:
             response = self.client.chat.completions.create(
@@ -247,14 +302,8 @@ class VllmOpenAIProvider(BaseProvider):
                 ],
                 # The model card asks for greedy decoding.
                 temperature=0.0,
-                max_tokens=max(self.max_tokens, max_tokens),
-                # vLLM-specific request options: keep the parser's special
-                # tokens in the decoded output and disable the chat template's
-                # thinking block, both per the model card.
-                extra_body={
-                    "skip_special_tokens": False,
-                    "chat_template_kwargs": {"enable_thinking": False},
-                },
+                max_tokens=budget,
+                extra_body=self._extra_body(),
             )
         except Exception as error:
             raise RuntimeError(
@@ -271,17 +320,156 @@ class VllmOpenAIProvider(BaseProvider):
         if finish_reason == "length" and not text.strip():
             raise RuntimeError(
                 f"Model '{self.model_name}' hit its output budget "
-                f"({max(self.max_tokens, max_tokens)} tokens) without "
-                "returning any text. Raise --vllm-max-tokens (and the server's "
-                "--max-model-len to fit it)."
+                f"({budget} tokens) without returning any text. Raise "
+                f"{self._max_tokens_flag} (and the server's --max-model-len "
+                "to fit it)."
             )
 
         usage = response.usage
         return VisionResult(
-            text=strip_wrapping_code_fence(text) if text else "",
+            text=self._postprocess(text) if text else "",
             usage=TokenUsage(
                 input_tokens=getattr(usage, "prompt_tokens", 0) or 0,
                 output_tokens=getattr(usage, "completion_tokens", 0) or 0,
                 cost_usd=0.0,
             ),
         )
+
+    # CLI flag named in the budget-exhaustion error; subclasses override it.
+    _max_tokens_flag = "--vllm-max-tokens"
+
+    def _build_prompt(self, prompt: str, prior_text: Optional[str]) -> str:
+        """Return the text prompt sent alongside the page image.
+
+        The default keeps the caller's prompt and appends any first-pass
+        digital text in ``<prior_text>`` tags, exactly like the cloud
+        providers. Subclasses whose model needs a fixed prompt recipe override
+        this.
+
+        Args:
+            prompt: Instruction prompt supplied by the extractor.
+            prior_text: Optional first-pass digital text for context.
+
+        Returns:
+            The full text prompt for the request.
+        """
+        if prior_text:
+            return f"{prompt}\n\n<prior_text>\n{prior_text}\n</prior_text>"
+        return prompt
+
+    def _extra_body(self) -> dict:
+        """Return vLLM-specific request options merged into the JSON body.
+
+        The default keeps the parser's special tokens in the decoded output and
+        disables the chat template's thinking block, both per the KDL model
+        card. Subclasses override this when their model needs different options.
+
+        Returns:
+            A dict passed as the OpenAI client's ``extra_body``.
+        """
+        return {
+            "skip_special_tokens": False,
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+
+    def _postprocess(self, text: str) -> str:
+        """Clean the raw model output into page markdown.
+
+        The default only unwraps a whole-page code fence. Subclasses whose
+        model emits grounding or other markup override this.
+
+        Args:
+            text: Raw text returned by the model.
+
+        Returns:
+            Cleaned page markdown.
+        """
+        return strip_wrapping_code_fence(text)
+
+
+class UnlimitedOcrProvider(VllmOpenAIProvider):
+    """Vision provider for Baidu Unlimited-OCR served on a local vLLM server.
+
+    Unlimited-OCR is DeepSeek-OCR lineage and shares the same vLLM
+    OpenAI-compatible transport as :class:`VllmOpenAIProvider`, but its recipe
+    differs in three ways handled here:
+
+    - It has no chat template and is trained on a fixed prompt that must begin
+      with ``<image>``. The extractor's generic markdown prompt (and any prior
+      text) is therefore ignored in favour of ``ocr_prompt``.
+    - Its output interleaves ``<|ref|>`` / ``<|det|>`` grounding markup, which
+      is stripped back to plain markdown.
+    - It needs no ``enable_thinking`` chat-template kwarg (there is no
+      template), only ``skip_special_tokens=False`` so the grounding markup
+      survives long enough to be stripped.
+
+    The server must be started with the model's no-repeat-ngram logits
+    processor (see the README); without it long pages loop on coordinate
+    tokens. That is a server-launch concern, not a client one.
+    """
+
+    _max_tokens_flag = "--unlimited-max-tokens"
+
+    def __init__(
+        self,
+        model_name: str = DEFAULT_UNLIMITED_MODEL,
+        base_url: str = DEFAULT_UNLIMITED_BASE_URL,
+        max_tokens: int = DEFAULT_UNLIMITED_MAX_TOKENS,
+        timeout: float = DEFAULT_REQUEST_TIMEOUT,
+        ocr_prompt: str = DEFAULT_UNLIMITED_OCR_PROMPT,
+    ):
+        """Initialize the Unlimited-OCR provider.
+
+        Args:
+            model_name: Served-model name to request.
+            base_url: vLLM OpenAI-compatible base URL.
+            max_tokens: Output token budget per page.
+            timeout: Per-request timeout in seconds.
+            ocr_prompt: Fixed recipe prompt sent for every page; must begin
+                with ``<image>``.
+        """
+        super().__init__(
+            model_name=model_name,
+            base_url=base_url,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        )
+        self.ocr_prompt = ocr_prompt
+
+    def _build_prompt(self, prompt: str, prior_text: Optional[str]) -> str:
+        """Return the fixed recipe prompt, ignoring the caller's prompt.
+
+        Unlimited-OCR returns empty output unless the prompt follows its recipe
+        (a leading ``<image>`` and its grounding instruction), so the
+        extractor's generic prompt and prior text are deliberately dropped.
+
+        Args:
+            prompt: Ignored.
+            prior_text: Ignored.
+
+        Returns:
+            The provider's fixed OCR prompt.
+        """
+        return self.ocr_prompt
+
+    def _extra_body(self) -> dict:
+        """Keep special tokens so grounding markup can be stripped afterwards.
+
+        Unlike KDL there is no chat template, so no ``chat_template_kwargs`` is
+        sent -- only ``skip_special_tokens=False``.
+
+        Returns:
+            A dict passed as the OpenAI client's ``extra_body``.
+        """
+        return {"skip_special_tokens": False}
+
+    def _postprocess(self, text: str) -> str:
+        """Strip grounding markup, then unwrap any whole-page code fence.
+
+        Args:
+            text: Raw model output with ``<|ref|>`` / ``<|det|>`` markup.
+
+        Returns:
+            Clean page markdown.
+        """
+        return strip_wrapping_code_fence(strip_grounding_tokens(text))

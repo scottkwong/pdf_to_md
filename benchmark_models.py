@@ -37,8 +37,12 @@ from local_ocr import (
 )
 from vllm_ocr import (
     DEFAULT_MAX_TOKENS as DEFAULT_VLLM_MAX_TOKENS,
+    DEFAULT_UNLIMITED_BASE_URL,
+    DEFAULT_UNLIMITED_MAX_TOKENS,
+    DEFAULT_UNLIMITED_MODEL,
     DEFAULT_VLLM_BASE_URL,
     DEFAULT_VLLM_MODEL,
+    UnlimitedOcrProvider,
     VllmOpenAIProvider,
     ensure_vllm_server,
     is_vllm_running,
@@ -61,16 +65,18 @@ class BenchmarkModelSpec:
 
     Attributes:
         label: Human-readable name shown in progress lines and the report.
-        kind: ``"api"`` for cloud providers, ``"local"`` for Ollama, or
-            ``"vllm"`` for a local vLLM OpenAI-compatible server.
+        kind: ``"api"`` for cloud providers, ``"local"`` for Ollama, ``"vllm"``
+            for a local vLLM OpenAI-compatible server, or ``"unlimited"`` for a
+            local vLLM server running Baidu Unlimited-OCR.
         model: models.json key (api), Ollama model tag (local), or served-model
-            name (vllm).
+            name (vllm / unlimited).
         prefer_openrouter: Route cloud calls via OpenRouter when available.
         ollama_url: Ollama generate endpoint for local models.
         num_ctx: Context window in tokens for local (ollama) models.
         num_predict: Output token budget per page for local (ollama) models.
-        vllm_url: vLLM OpenAI-compatible base URL for vllm models.
-        vllm_max_tokens: Output token budget per page for vllm models.
+        vllm_url: vLLM OpenAI-compatible base URL for vllm / unlimited models.
+        vllm_max_tokens: Output token budget per page for vllm / unlimited
+            models.
     """
 
     label: str
@@ -169,12 +175,16 @@ def parse_benchmark_specs(
     vllm_model: str = DEFAULT_VLLM_MODEL,
     vllm_url: str = DEFAULT_VLLM_BASE_URL,
     vllm_max_tokens: int = DEFAULT_VLLM_MAX_TOKENS,
+    unlimited_model: str = DEFAULT_UNLIMITED_MODEL,
+    unlimited_url: str = DEFAULT_UNLIMITED_BASE_URL,
+    unlimited_max_tokens: int = DEFAULT_UNLIMITED_MAX_TOKENS,
 ) -> List[BenchmarkModelSpec]:
     """Parse a comma-separated ``--benchmark-models`` override into specs.
 
     Each entry is one of ``local`` / ``local:<model>`` for an Ollama model,
-    ``vllm`` / ``vllm:<model>`` for a local vLLM served model, or a models.json
-    key for a cloud model.
+    ``vllm`` / ``vllm:<model>`` for a local vLLM served model, ``unlimited`` /
+    ``unlimited:<model>`` for a local Baidu Unlimited-OCR server, or a
+    models.json key for a cloud model.
 
     Args:
         spec_arg: Comma-separated list of model identifiers.
@@ -186,6 +196,10 @@ def parse_benchmark_specs(
         vllm_model: Default served-model name when an entry is bare ``vllm``.
         vllm_url: vLLM OpenAI-compatible base URL for vllm entries.
         vllm_max_tokens: Output token budget per page for vllm entries.
+        unlimited_model: Default served-model name when an entry is bare
+            ``unlimited``.
+        unlimited_url: vLLM OpenAI-compatible base URL for unlimited entries.
+        unlimited_max_tokens: Output token budget per page for unlimited entries.
 
     Returns:
         List of parsed specs, preserving input order.
@@ -242,6 +256,29 @@ def parse_benchmark_specs(
                     model=model,
                     vllm_url=vllm_url,
                     vllm_max_tokens=vllm_max_tokens,
+                )
+            )
+        elif lowered in ("unlimited", "unlimited-ocr"):
+            specs.append(
+                BenchmarkModelSpec(
+                    label=f"Unlimited-OCR ({unlimited_model})",
+                    kind="unlimited",
+                    model=unlimited_model,
+                    vllm_url=unlimited_url,
+                    vllm_max_tokens=unlimited_max_tokens,
+                )
+            )
+        elif lowered.startswith("unlimited:") or lowered.startswith(
+            "unlimited-ocr:"
+        ):
+            model = entry.split(":", 1)[1].strip() or unlimited_model
+            specs.append(
+                BenchmarkModelSpec(
+                    label=f"Unlimited-OCR ({model})",
+                    kind="unlimited",
+                    model=model,
+                    vllm_url=unlimited_url,
+                    vllm_max_tokens=unlimited_max_tokens,
                 )
             )
         else:
@@ -353,8 +390,11 @@ def _precheck_local_spec(spec: BenchmarkModelSpec) -> Optional[str]:
 def _precheck_vllm_spec(spec: BenchmarkModelSpec) -> Optional[str]:
     """Return a skip reason for a vLLM spec, or None if it can run.
 
+    Covers both the ``vllm`` and ``unlimited`` kinds, which share the same
+    OpenAI-compatible reachability check.
+
     Args:
-        spec: vLLM model spec to validate.
+        spec: vLLM/unlimited model spec to validate.
 
     Returns:
         A human-readable skip reason, or None when the spec is runnable.
@@ -395,6 +435,21 @@ def _build_extractor(spec: BenchmarkModelSpec, max_parallel_pages: int):
             max_tokens=spec.vllm_max_tokens,
         )
         model_id = spec.model
+    elif spec.kind == "unlimited":
+        _log(f"[{spec.label}] checking vLLM server...")
+        ensure_vllm_server(
+            spec.model,
+            spec.vllm_url,
+            verbose=True,
+            url_flag="--unlimited-url",
+            model_flag="--unlimited-model",
+        )
+        provider = UnlimitedOcrProvider(
+            model_name=spec.model,
+            base_url=spec.vllm_url,
+            max_tokens=spec.vllm_max_tokens,
+        )
+        model_id = spec.model
     else:
         from llm_providers import create_provider
 
@@ -429,7 +484,7 @@ def _run_single_benchmark(
     """
     if spec.kind == "local":
         skip_reason = _precheck_local_spec(spec)
-    elif spec.kind == "vllm":
+    elif spec.kind in ("vllm", "unlimited"):
         skip_reason = _precheck_vllm_spec(spec)
     else:
         skip_reason = _precheck_api_spec(spec)
@@ -530,8 +585,9 @@ def benchmark_models(
         raise ValueError("At least one model spec is required to benchmark.")
 
     resolved_pdf = _resolve_benchmark_pdf(pdf_path)
-    # Ollama and vLLM models both run on the local GPU and must not overlap.
-    gpu_kinds = {"local", "vllm"}
+    # Ollama and vLLM models (KDL, Unlimited-OCR) all run on the local GPU and
+    # must not overlap.
+    gpu_kinds = {"local", "vllm", "unlimited"}
     local_count = sum(1 for s in specs if s.kind in gpu_kinds)
 
     _log("=" * 70)

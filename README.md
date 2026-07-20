@@ -214,16 +214,19 @@ To utilize additional options:
 - `-d`, `--debug`: Enable debug logging for page processing order. Useful for diagnosing page ordering issues.
 - `--extractor <extractor>`: Extraction method: `vision` (default, LLM-based) or `llamaparse` (LlamaCloud API). Ignored when `--local` is set.
 - `--local`: Run OCR fully offline against a local model server. No API keys and no per-token cost.
-- `--local-backend <backend>`: Local runtime used with `--local`: `ollama` (default) or `vllm` (an OpenAI-compatible vLLM server, e.g. for [KDL-Frontier-Parser-nano](https://huggingface.co/KDLAI/KDL-Frontier-Parser-nano)).
+- `--local-backend <backend>`: Local runtime used with `--local`: `ollama` (default), `vllm` (an OpenAI-compatible vLLM server, e.g. for [KDL-Frontier-Parser-nano](https://huggingface.co/KDLAI/KDL-Frontier-Parser-nano)), or `unlimited-ocr` (a vLLM server serving [Baidu Unlimited-OCR](https://huggingface.co/baidu/Unlimited-OCR)).
 - `--local-model <tag>`: Ollama vision model tag to use with `--local --local-backend ollama` and as the local entry in `--benchmark` (default: `qwen2.5vl:7b`).
 - `--ollama-url <url>`: Ollama generate endpoint for `--local --local-backend ollama` / local benchmark models (default: `http://localhost:11434/api/generate`).
 - `--vllm-model <name>`: Served-model name to request from the vLLM server with `--local --local-backend vllm` (default: `kdl-frontier-parser-nano`).
 - `--vllm-url <url>`: vLLM OpenAI-compatible base URL for `--local --local-backend vllm` / `vllm` benchmark entries (default: `http://localhost:8000/v1`).
 - `--vllm-max-tokens <N>`: Output token budget per page for `--local --local-backend vllm` / `vllm` benchmark entries (default: `4096`). Keep it below the server's `--max-model-len` minus the page image and prompt.
+- `--unlimited-model <name>`: Served-model name to request from the vLLM server with `--local --local-backend unlimited-ocr` / `unlimited` benchmark entries (default: `unlimited-ocr`).
+- `--unlimited-url <url>`: vLLM OpenAI-compatible base URL for Baidu Unlimited-OCR (default: `http://localhost:8001/v1`). A separate model needs a separate server, so it defaults to a different port than `--vllm-url`.
+- `--unlimited-max-tokens <N>`: Output token budget per page for `--local --local-backend unlimited-ocr` / `unlimited` benchmark entries (default: `8192`).
 - `--llamaparse-tier <tier>`: LlamaParse processing tier (only with `--extractor llamaparse`): `fast`, `cost_effective`, `agentic` (default), `agentic_plus`.
 - `--language <lang>`: Document language code for LlamaParse (default: `en`).
 - `--benchmark`: Benchmark and compare the top model from each provider (OpenAI, Anthropic, and Local) on the same PDF, then exit. Runs models in parallel and streams progress. The local model may download weights on first run.
-- `--benchmark-models <list>`: Comma-separated override for `--benchmark`, e.g. `gpt-5.5,claude-opus-4.6,local`. Use `local` or `local:<model>` for an Ollama model, `vllm` or `vllm:<model>` for a local vLLM served model (e.g. KDL-Frontier-Parser-nano); other entries are `models.json` keys.
+- `--benchmark-models <list>`: Comma-separated override for `--benchmark`, e.g. `gpt-5.5,claude-opus-4.6,local`. Use `local` or `local:<model>` for an Ollama model, `vllm` or `vllm:<model>` for a local vLLM served model (e.g. KDL-Frontier-Parser-nano), `unlimited` or `unlimited:<model>` for a local Baidu Unlimited-OCR server; other entries are `models.json` keys.
 - `--benchmark-reference <label>`: Model label used as the baseline in the `--benchmark` HTML comparison; every other model is diffed against it and it is shown first. Defaults to the first benchmarked model. Remaining models are ordered cheapest-first.
 - `--benchmark-digital-text-parsers`: Run a direct package benchmark (no LLM calls) comparing pypdf and PyMuPDF digital text parsers, then exit.
 - `--benchmark-runs <N>`: Number of benchmark runs per parser (default: `10`).
@@ -298,6 +301,9 @@ To utilize additional options:
 
 # Point at a vLLM server on another host / port
 ./pdf_to_md.py document.pdf --local --local-backend vllm --vllm-url http://192.168.1.10:8000/v1
+
+# Run offline against a local vLLM server serving Baidu Unlimited-OCR
+./pdf_to_md.py document.pdf --local --local-backend unlimited-ocr
 
 # Benchmark the top OpenAI, Anthropic, and Local models on one PDF (parallel)
 ./pdf_to_md.py document.pdf --benchmark
@@ -442,6 +448,49 @@ requirements (`enable_thinking=False`, `skip_special_tokens=False`) are set on
 every request. If the local server is started with `--api-key`, export the same
 value as `VLLM_API_KEY`.
 
+#### Unlimited-OCR backend (Baidu)
+
+`--local-backend unlimited-ocr` targets
+[Baidu Unlimited-OCR](https://huggingface.co/baidu/Unlimited-OCR), a 3.3B
+DeepSeek-OCR-lineage model for long documents. It is also served with vLLM, but
+its recipe differs from KDL's and the app handles the differences for you:
+
+- It has **no chat template** and is trained on a fixed prompt that must begin
+  with `<image>`, so the app sends that recipe prompt (ignoring the generic
+  markdown prompt and any `vt` prior text).
+- Its raw output carries `<|ref|>…<|/ref|>` / `<|det|>…<|/det|>` grounding
+  markup; the app strips the coordinate boxes and unwraps the reference spans to
+  leave clean markdown.
+- The server needs the model's **no-repeat-ngram logits processor** registered
+  at launch, or long pages loop on coordinate tokens.
+
+Because a vLLM server serves one model, Unlimited-OCR runs as its **own server**
+on its **own port** — it defaults to `http://localhost:8001/v1`, separate from
+KDL's `:8000`.
+
+Setup:
+
+```bash
+# 1. Serve Unlimited-OCR on its own port (8001). Its architecture ships in a
+#    dedicated vLLM release image; register the required logits processor. See
+#    the model card for the exact image tag.
+vllm serve baidu/Unlimited-OCR \
+  --served-model-name unlimited-ocr \
+  --port 8001 \
+  --max-model-len 32768 \
+  --trust-remote-code \
+  --limit-mm-per-prompt '{"image":1}' \
+  --logits_processors vllm.model_executor.models.unlimited_ocr:NGramPerReqLogitsProcessor
+
+# 2. Convert offline against it.
+./pdf_to_md.py document.pdf --local --local-backend unlimited-ocr
+```
+
+Point at a different server with `--unlimited-url`, name a different served
+model with `--unlimited-model`, and cap per-page output with
+`--unlimited-max-tokens` (default 8192). As with the KDL backend, an unreachable
+or mis-named server stops the run before any page is processed.
+
 ### Model benchmark (`--benchmark`)
 
 `--benchmark` runs the **same PDF** through the top model from each provider
@@ -477,6 +526,42 @@ run.
   --benchmark-models "gpt-5.5,local,vllm" \
   --benchmark-pdf document.pdf
 ```
+
+#### Compare the local models head-to-head (Qwen vs KDL vs Unlimited-OCR)
+
+To try the two Hugging Face parsers against the Qwen baseline on your own PDF —
+all offline, no API keys — start the three local servers, then run one command.
+On one GPU the two vLLM servers can't both hold weights at full utilization, so
+lower `--gpu-memory-utilization` on each (or run the pairwise benchmarks in
+`--benchmark-models` separately).
+
+```bash
+# 1. Ollama for Qwen (the "local" entry)
+ollama serve                       # in one terminal
+
+# 2. KDL-Frontier-Parser-nano on :8000 (the "vllm" entry)
+vllm serve KDLAI/KDL-Frontier-Parser-nano \
+  --served-model-name kdl-frontier-parser-nano --port 8000 \
+  --max-model-len 8192 --gpu-memory-utilization 0.45 \
+  --trust-remote-code --limit-mm-per-prompt '{"image":1}'
+
+# 3. Baidu Unlimited-OCR on :8001 (the "unlimited" entry)
+vllm serve baidu/Unlimited-OCR \
+  --served-model-name unlimited-ocr --port 8001 \
+  --max-model-len 32768 --gpu-memory-utilization 0.45 \
+  --trust-remote-code --limit-mm-per-prompt '{"image":1}' \
+  --logits_processors vllm.model_executor.models.unlimited_ocr:NGramPerReqLogitsProcessor
+
+# 4. Benchmark all three on your PDF (writes markdown + an HTML comparison).
+./pdf_to_md.py --benchmark \
+  --benchmark-models "local,vllm,unlimited" \
+  --benchmark-pdf document.pdf
+```
+
+Any server that isn't up is reported as **skipped** with the reason, so you can
+also start just one of the two parsers and compare it against Qwen. The
+local models run one at a time (they share the GPU) while the comparison HTML
+lets you judge quality page by page.
 
 #### Benchmark artifacts
 

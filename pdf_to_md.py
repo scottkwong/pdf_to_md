@@ -75,6 +75,9 @@ def create_extractor(
     vllm_model: str = "kdl-frontier-parser-nano",
     vllm_url: str = "http://localhost:8000/v1",
     vllm_max_tokens: int = 4096,
+    unlimited_model: str = "unlimited-ocr",
+    unlimited_url: str = "http://localhost:8001/v1",
+    unlimited_max_tokens: int = 8192,
 ) -> "BaseExtractor":
     """
     Create appropriate extractor based on type.
@@ -102,6 +105,12 @@ def create_extractor(
         vllm_url: vLLM OpenAI-compatible base URL for the local (vllm) extractor.
         vllm_max_tokens: Output token budget per page for the local (vllm)
             extractor.
+        unlimited_model: Served-model name for the local (unlimited-ocr)
+            extractor.
+        unlimited_url: vLLM OpenAI-compatible base URL for the local
+            (unlimited-ocr) extractor.
+        unlimited_max_tokens: Output token budget per page for the local
+            (unlimited-ocr) extractor.
 
     Returns:
         Configured BaseExtractor instance.
@@ -131,6 +140,31 @@ def create_extractor(
             return VisionExtractor(
                 provider=provider,
                 model_id=vllm_model,
+                mode=mode,
+                max_parallel_pages=max_parallel_pages,
+                digital_text_parser=digital_text_parser,
+            )
+
+        if local_backend == "unlimited-ocr":
+            # Offline extraction against a locally running vLLM server serving
+            # Baidu Unlimited-OCR (DeepSeek-OCR lineage).
+            from vllm_ocr import UnlimitedOcrProvider, ensure_vllm_server
+
+            ensure_vllm_server(
+                unlimited_model,
+                unlimited_url,
+                verbose=True,
+                url_flag="--unlimited-url",
+                model_flag="--unlimited-model",
+            )
+            provider = UnlimitedOcrProvider(
+                model_name=unlimited_model,
+                base_url=unlimited_url,
+                max_tokens=unlimited_max_tokens,
+            )
+            return VisionExtractor(
+                provider=provider,
+                model_id=unlimited_model,
                 mode=mode,
                 max_parallel_pages=max_parallel_pages,
                 digital_text_parser=digital_text_parser,
@@ -293,6 +327,10 @@ def print_cli_configuration(args: argparse.Namespace, model: str) -> None:
             print(f"  vLLM model:         {args.vllm_model}")
             print(f"  vLLM URL:           {args.vllm_url}")
             print(f"  Output budget:      {args.vllm_max_tokens} tokens/page")
+        elif args.local_backend == "unlimited-ocr":
+            print(f"  Unlimited model:    {args.unlimited_model}")
+            print(f"  Unlimited URL:      {args.unlimited_url}")
+            print(f"  Output budget:      {args.unlimited_max_tokens} tokens/page")
         else:
             print(f"  Local model:        {args.local_model}")
             print(f"  Ollama URL:         {args.ollama_url}")
@@ -641,10 +679,11 @@ def main() -> None:
     parser.add_argument(
         "--local-backend",
         type=str,
-        choices=["ollama", "vllm"],
+        choices=["ollama", "vllm", "unlimited-ocr"],
         default="ollama",
-        help="Local runtime used with --local: 'ollama' (default) or 'vllm' "
-        "(an OpenAI-compatible vLLM server, e.g. for KDL-Frontier-Parser-nano).",
+        help="Local runtime used with --local: 'ollama' (default), 'vllm' "
+        "(an OpenAI-compatible vLLM server, e.g. for KDL-Frontier-Parser-nano), "
+        "or 'unlimited-ocr' (a vLLM server serving Baidu Unlimited-OCR).",
     )
     parser.add_argument(
         "--local-model",
@@ -674,6 +713,30 @@ def main() -> None:
         help="Output token budget per page for --local --local-backend vllm / "
         "'vllm' benchmark entries (default: 4096). Keep it below the server's "
         "--max-model-len minus the page image and prompt.",
+    )
+    parser.add_argument(
+        "--unlimited-model",
+        type=str,
+        default="unlimited-ocr",
+        help="Served-model name to request from the vLLM server with "
+        "--local --local-backend unlimited-ocr / 'unlimited' benchmark entries "
+        "(default: unlimited-ocr).",
+    )
+    parser.add_argument(
+        "--unlimited-url",
+        type=str,
+        default="http://localhost:8001/v1",
+        help="vLLM OpenAI-compatible base URL for Baidu Unlimited-OCR with "
+        "--local --local-backend unlimited-ocr / 'unlimited' benchmark entries "
+        "(default: http://localhost:8001/v1). A separate model needs a "
+        "separate server, so it defaults to a different port than --vllm-url.",
+    )
+    parser.add_argument(
+        "--unlimited-max-tokens",
+        type=int,
+        default=8192,
+        help="Output token budget per page for --local --local-backend "
+        "unlimited-ocr / 'unlimited' benchmark entries (default: 8192).",
     )
     parser.add_argument(
         "--ollama-url",
@@ -837,6 +900,9 @@ def main() -> None:
                 vllm_model=args.vllm_model,
                 vllm_url=args.vllm_url,
                 vllm_max_tokens=args.vllm_max_tokens,
+                unlimited_model=args.unlimited_model,
+                unlimited_url=args.unlimited_url,
+                unlimited_max_tokens=args.unlimited_max_tokens,
             )
         else:
             specs = default_benchmark_specs(
@@ -925,8 +991,14 @@ def main() -> None:
                 vllm_model=args.vllm_model,
                 vllm_url=args.vllm_url,
                 vllm_max_tokens=args.vllm_max_tokens,
+                unlimited_model=args.unlimited_model,
+                unlimited_url=args.unlimited_url,
+                unlimited_max_tokens=args.unlimited_max_tokens,
             )
-            backend_label = "vLLM" if args.local_backend == "vllm" else "Ollama"
+            backend_label = {
+                "vllm": "vLLM",
+                "unlimited-ocr": "vLLM / Unlimited-OCR",
+            }.get(args.local_backend, "Ollama")
             print("=" * 70)
             print(f"Local OCR Configuration ({backend_label}):")
             print("=" * 70)
@@ -934,6 +1006,9 @@ def main() -> None:
             if args.local_backend == "vllm":
                 print(f"  vLLM model:         {args.vllm_model}")
                 print(f"  vLLM URL:           {args.vllm_url}")
+            elif args.local_backend == "unlimited-ocr":
+                print(f"  Unlimited model:    {args.unlimited_model}")
+                print(f"  Unlimited URL:      {args.unlimited_url}")
             else:
                 print(f"  Local model:        {args.local_model}")
                 print(f"  Ollama URL:         {args.ollama_url}")

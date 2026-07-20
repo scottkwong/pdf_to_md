@@ -15,13 +15,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from vllm_ocr import (  # noqa: E402
     DEFAULT_MAX_TOKENS,
+    DEFAULT_UNLIMITED_MODEL,
+    DEFAULT_UNLIMITED_OCR_PROMPT,
     DEFAULT_VLLM_BASE_URL,
     DEFAULT_VLLM_MODEL,
+    UnlimitedOcrProvider,
     VllmOpenAIProvider,
     _models_url,
     ensure_vllm_server,
     is_vllm_running,
     list_served_vllm_models,
+    strip_grounding_tokens,
 )
 
 
@@ -49,13 +53,15 @@ def _fake_completion(
     return SimpleNamespace(choices=[choice], usage=usage)
 
 
-def _provider_with_stub(response, capture: dict):
+def _provider_with_stub(response, capture: dict, provider=None):
     """Return a provider whose chat.completions.create returns ``response``.
 
     ``capture`` is populated with the kwargs the create() call receives so the
-    test can assert on the request payload.
+    test can assert on the request payload. Pass ``provider`` to stub a subclass
+    (e.g. UnlimitedOcrProvider); defaults to a plain VllmOpenAIProvider.
     """
-    provider = VllmOpenAIProvider(model_name=DEFAULT_VLLM_MODEL)
+    if provider is None:
+        provider = VllmOpenAIProvider(model_name=DEFAULT_VLLM_MODEL)
 
     def fake_create(**kwargs):
         capture.update(kwargs)
@@ -230,6 +236,82 @@ def test_provider_strips_wrapping_fence() -> None:
     assert result.text == "# Page"
 
 
+def test_strip_grounding_tokens() -> None:
+    """DeepSeek-OCR grounding markup is reduced to clean text.
+
+    <|ref|> spans are unwrapped, <|det|> coordinate boxes are dropped, and
+    stray grounding markers are removed.
+    """
+    raw = (
+        "# Title\n"
+        "<|ref|>Body paragraph.<|/ref|><|det|>[[10,20,30,40]]<|/det|>\n"
+        "<|grounding|>Trailing line."
+    )
+    assert strip_grounding_tokens(raw) == (
+        "# Title\nBody paragraph.\nTrailing line."
+    )
+    # Plain markdown with no grounding markup is unchanged (bar surrounding ws).
+    assert strip_grounding_tokens("# Just markdown") == "# Just markdown"
+
+
+def test_unlimited_provider_uses_recipe_prompt_and_strips_grounding() -> None:
+    """Unlimited-OCR ignores the caller prompt and cleans grounded output."""
+    capture: dict = {}
+    grounded = (
+        "<|ref|># Heading<|/ref|><|det|>[[1,2,3,4]]<|/det|>\n\nParagraph."
+    )
+    response = _fake_completion(
+        grounded, prompt_tokens=900, completion_tokens=120
+    )
+    provider = _provider_with_stub(
+        response, capture, provider=UnlimitedOcrProvider()
+    )
+
+    result = provider.process_vision(
+        image_base64=_sample_image_base64(),
+        prompt="Write a Markdown version of this page",  # ignored
+        prior_text="prior digital text",  # ignored
+        max_tokens=1024,
+    )
+
+    # Output is the recipe transcription with grounding markup removed.
+    assert result.text == "# Heading\n\nParagraph."
+    assert result.usage.cost_usd == 0.0
+
+    # The fixed recipe prompt is sent verbatim (begins with <image>), not the
+    # caller's prompt, and prior text is not appended.
+    text_part = next(
+        p for p in capture["messages"][0]["content"] if p["type"] == "text"
+    )
+    assert text_part["text"] == DEFAULT_UNLIMITED_OCR_PROMPT
+    assert text_part["text"].startswith("<image>")
+    assert "prior digital text" not in text_part["text"]
+
+    # No chat template exists, so no enable_thinking kwarg is sent; special
+    # tokens are kept so the grounding markup survives to be stripped.
+    extra = capture["extra_body"]
+    assert extra == {"skip_special_tokens": False}
+    assert capture["model"] == DEFAULT_UNLIMITED_MODEL
+    assert capture["temperature"] == 0.0
+
+
+def test_unlimited_budget_error_names_its_flag() -> None:
+    """An empty length-capped Unlimited page names --unlimited-max-tokens."""
+    capture: dict = {}
+    response = _fake_completion("", finish_reason="length")
+    provider = _provider_with_stub(
+        response, capture, provider=UnlimitedOcrProvider()
+    )
+    try:
+        provider.process_vision(
+            image_base64=_sample_image_base64(), prompt="ignored"
+        )
+    except RuntimeError as error:
+        assert "--unlimited-max-tokens" in str(error)
+    else:  # pragma: no cover
+        raise AssertionError("Expected RuntimeError on empty truncated page")
+
+
 def run_all_tests() -> bool:
     """Run vLLM OCR tests directly (used by run_tests.py-style runners)."""
     test_models_url_derivation()
@@ -243,6 +325,9 @@ def run_all_tests() -> bool:
     test_provider_raises_on_empty_length_truncation()
     test_truncated_but_usable_page_is_kept()
     test_provider_strips_wrapping_fence()
+    test_strip_grounding_tokens()
+    test_unlimited_provider_uses_recipe_prompt_and_strips_grounding()
+    test_unlimited_budget_error_names_its_flag()
     print("  ✓ vLLM OCR provider tests passed")
     return True
 
