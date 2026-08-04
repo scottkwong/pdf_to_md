@@ -28,7 +28,7 @@ def _get_version() -> str:
 # a different model your personal default, set PDF_TO_MD_MODEL in your .env
 # (e.g. PDF_TO_MD_MODEL=qwen3-vl-32b) along with the matching provider key.
 DEFAULT_MODEL = "gpt-5.5"
-_FIREWORKS_FALLBACK_MODEL = "qwen3-vl-32b"
+_FIREWORKS_FALLBACK_MODEL = "qwen3.7-plus"
 
 
 def _default_model() -> str:
@@ -620,16 +620,16 @@ def main() -> None:
         "--fireworks",
         action="store_true",
         default=False,
-        help="Use Fireworks AI as the provider with a strong open-weight vision "
-        "model (default: qwen3-vl-32b). Requires FIREWORKS_API_KEY. Shortcut "
-        "for '--model <fireworks-model>'; pick the model with --fireworks-model.",
+        help="Use Fireworks AI as the provider with a capable multimodal model "
+        "(default: qwen3.7-plus). Requires FIREWORKS_API_KEY. Shortcut for "
+        "'--model <fireworks-model>'; pick the model with --fireworks-model.",
     )
     parser.add_argument(
         "--fireworks-model",
         type=str,
         default=_default_fireworks_model(),
         help="Fireworks model (models.json key) to use with --fireworks "
-        "(default: qwen3-vl-32b). Other options: qwen3-vl-8b, qwen3.7-plus.",
+        "(default: qwen3.7-plus). Other options: qwen3-vl-32b, qwen3-vl-8b.",
     )
     parser.add_argument(
         "--local",

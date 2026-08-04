@@ -132,9 +132,9 @@ def test_models_json_has_fireworks_default() -> None:
         for name, cfg in config.items()
         if cfg.get("provider") == "fireworks"
     }
-    assert "qwen3-vl-32b" in fireworks
+    assert "qwen3.7-plus" in fireworks
     defaults = [n for n, c in fireworks.items() if c.get("fireworks_default")]
-    assert defaults == ["qwen3-vl-32b"]
+    assert defaults == ["qwen3.7-plus"]
     for cfg in fireworks.values():
         assert cfg.get("supports_vision") is True
         assert cfg["direct_id"].startswith("accounts/fireworks/models/")
@@ -149,7 +149,7 @@ def test_default_model_honors_env_override() -> None:
         assert pdf_to_md._default_model() == "gpt-5.5"
     with mock.patch.dict(os.environ, {"PDF_TO_MD_MODEL": "qwen3-vl-32b"}, clear=False):
         assert pdf_to_md._default_model() == "qwen3-vl-32b"
-    assert pdf_to_md._default_fireworks_model() == "qwen3-vl-32b"
+    assert pdf_to_md._default_fireworks_model() == "qwen3.7-plus"
 
 
 def run_all_tests() -> bool:
