@@ -190,7 +190,7 @@ The tool uses **direct provider APIs by default** (not OpenRouter). Pass `--pref
 ```bash
 # .env
 FIREWORKS_API_KEY=your_fireworks_key_here
-PDF_TO_MD_MODEL=qwen3-vl-235b
+PDF_TO_MD_MODEL=qwen3-vl-32b
 ```
 
 Now `./pdf_to_md.py document.pdf` runs on Fireworks Qwen3-VL with no flags. `--model` / `--fireworks` / `--local` still override it per run. Run `./pdf_to_md.py --list-models` to see every model and which is the default.
@@ -229,8 +229,8 @@ To utilize additional options:
 - `--model <model>`: Model identifier from `models.json` to use for both vision and text processing (default: `gpt-5.5`, or the `PDF_TO_MD_MODEL` env var if set).
 - `--provider <provider>`: Force specific provider: `openrouter`, `openai`, `anthropic`, `google`, or `fireworks` (optional).
 - `--prefer-openrouter`: Route via OpenRouter when available. Default is to use direct provider APIs.
-- `--fireworks`: Use Fireworks AI with a strong open-weight vision model (default `qwen3-vl-235b`). Requires `FIREWORKS_API_KEY`. Shortcut for `--model <fireworks-model>`.
-- `--fireworks-model <model>`: Which Fireworks model (`models.json` key) `--fireworks` uses. Default `qwen3-vl-235b`; also `qwen3-vl-32b`, `qwen3.7-plus`.
+- `--fireworks`: Use Fireworks AI with a strong open-weight vision model (default `qwen3-vl-32b`). Requires `FIREWORKS_API_KEY`. Shortcut for `--model <fireworks-model>`.
+- `--fireworks-model <model>`: Which Fireworks model (`models.json` key) `--fireworks` uses. Default `qwen3-vl-32b`; also `qwen3-vl-8b`, `qwen3.7-plus`.
 - `-q`, `--quiet`: Disables verbose output. By default, the script prints markdown to console.
 - `-r`, `--recursive`: Processes all PDF files within the target directory recursively. Files are processed in parallel by default.
 - `-s`, `--single`: Process files sequentially instead of in parallel when using `-r`.
@@ -261,8 +261,8 @@ To utilize additional options:
 - `claude-opus-4.5` - Anthropic Claude Opus 4.5
 - `claude-opus-4.6` - Anthropic Claude Opus 4.6
 - `claude-haiku-4.5` - Anthropic Claude Haiku 4.5
-- `qwen3-vl-235b` - Qwen3-VL 235B-A22B Instruct via Fireworks (default for `--fireworks`)
-- `qwen3-vl-32b` - Qwen3-VL 32B Instruct via Fireworks
+- `qwen3-vl-32b` - Qwen3-VL 32B Instruct via Fireworks (default for `--fireworks`)
+- `qwen3-vl-8b` - Qwen3-VL 8B Instruct via Fireworks (cheaper)
 - `qwen3.7-plus` - Qwen 3.7 Plus (multimodal flagship) via Fireworks
 
 **Examples:**
@@ -485,12 +485,12 @@ Each model in `models.json` has a home provider. The tool routes to it based on 
 ./pdf_to_md.py document.pdf --fireworks
 ```
 
-Default model is `qwen3-vl-235b` (Qwen3-VL 235B-A22B Instruct) — an *instruct* model (no reasoning/"thinking" overhead) with 32-language OCR, and a 22B-active MoE so it's inexpensive (~$0.20/$0.88 per M tokens). Alternatives via `--fireworks-model`: `qwen3-vl-32b`, or `qwen3.7-plus` (the multimodal flagship; note it's a reasoning model). Fireworks models are also plain `models.json` keys, so they work anywhere a model is accepted, including `--benchmark`:
+Default model is `qwen3-vl-32b` (Qwen3-VL 32B Instruct) — a dedicated vision-language *instruct* model (no reasoning/"thinking" overhead) with 32-language OCR, served **serverless** (pay-per-token) so it works with just a key. Alternatives via `--fireworks-model`: `qwen3-vl-8b` (cheaper, also serverless) or `qwen3.7-plus` (the multimodal flagship; note it's a reasoning model). The larger `qwen3-vl-235b-a22b-instruct` is **not** offered here because on Fireworks it requires an on-demand GPU deployment rather than serverless per-token access, so a plain API key can't call it. Fireworks models are plain `models.json` keys, so they work anywhere a model is accepted, including `--benchmark`:
 
 ```bash
 # Benchmark Fireworks Qwen3-VL against OpenAI, Anthropic, and a local model
 ./pdf_to_md.py --benchmark \
-  --benchmark-models "gpt-5.5,claude-opus-4.6,qwen3-vl-235b,local" \
+  --benchmark-models "gpt-5.5,claude-opus-4.6,qwen3-vl-32b,local" \
   --benchmark-pdf document.pdf
 ```
 

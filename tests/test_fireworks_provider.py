@@ -66,7 +66,7 @@ def test_provider_uses_fireworks_base_url_and_vision_shape() -> None:
             image_base64="QUJD",
             prompt="Convert to markdown",
             prior_text="prior text",
-            model="accounts/fireworks/models/qwen3-vl-235b-a22b-instruct",
+            model="accounts/fireworks/models/qwen3-vl-32b-instruct",
             max_tokens=4096,
         )
 
@@ -75,7 +75,7 @@ def test_provider_uses_fireworks_base_url_and_vision_shape() -> None:
         assert result.usage.output_tokens == 300
 
         call_kwargs = fake_client.chat.completions.create.call_args.kwargs
-        assert call_kwargs["model"].endswith("qwen3-vl-235b-a22b-instruct")
+        assert call_kwargs["model"].endswith("qwen3-vl-32b-instruct")
         content = call_kwargs["messages"][0]["content"]
         text_part = next(p for p in content if p["type"] == "text")
         image_part = next(p for p in content if p["type"] == "image_url")
@@ -119,9 +119,9 @@ def test_resolve_model_routes_fireworks_to_fireworks_provider() -> None:
             "fireworks": True,
         },
     ):
-        model_id, provider = resolve_model("qwen3-vl-235b", prefer_openrouter=False)
+        model_id, provider = resolve_model("qwen3-vl-32b", prefer_openrouter=False)
     assert isinstance(provider, FireworksProvider)
-    assert model_id == "accounts/fireworks/models/qwen3-vl-235b-a22b-instruct"
+    assert model_id == "accounts/fireworks/models/qwen3-vl-32b-instruct"
 
 
 def test_models_json_has_fireworks_default() -> None:
@@ -132,9 +132,9 @@ def test_models_json_has_fireworks_default() -> None:
         for name, cfg in config.items()
         if cfg.get("provider") == "fireworks"
     }
-    assert "qwen3-vl-235b" in fireworks
+    assert "qwen3-vl-32b" in fireworks
     defaults = [n for n, c in fireworks.items() if c.get("fireworks_default")]
-    assert defaults == ["qwen3-vl-235b"]
+    assert defaults == ["qwen3-vl-32b"]
     for cfg in fireworks.values():
         assert cfg.get("supports_vision") is True
         assert cfg["direct_id"].startswith("accounts/fireworks/models/")
@@ -147,9 +147,9 @@ def test_default_model_honors_env_override() -> None:
     with mock.patch.dict(os.environ, {}, clear=False):
         os.environ.pop("PDF_TO_MD_MODEL", None)
         assert pdf_to_md._default_model() == "gpt-5.5"
-    with mock.patch.dict(os.environ, {"PDF_TO_MD_MODEL": "qwen3-vl-235b"}, clear=False):
-        assert pdf_to_md._default_model() == "qwen3-vl-235b"
-    assert pdf_to_md._default_fireworks_model() == "qwen3-vl-235b"
+    with mock.patch.dict(os.environ, {"PDF_TO_MD_MODEL": "qwen3-vl-32b"}, clear=False):
+        assert pdf_to_md._default_model() == "qwen3-vl-32b"
+    assert pdf_to_md._default_fireworks_model() == "qwen3-vl-32b"
 
 
 def run_all_tests() -> bool:
