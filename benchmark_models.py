@@ -277,8 +277,11 @@ def _resolve_api_routing(spec: BenchmarkModelSpec):
         "openai": "OPENAI_API_KEY",
         "anthropic": "ANTHROPIC_API_KEY",
         "google": "GOOGLE_API_KEY/GEMINI_API_KEY",
+        "fireworks": "FIREWORKS_API_KEY",
     }.get(provider_name, f"{provider_name} API key")
-    return f"no {key_env} or OPENROUTER_API_KEY set", False
+    # Only mention OpenRouter when the model could actually route through it.
+    suffix = " or OPENROUTER_API_KEY" if has_openrouter_id else ""
+    return f"no {key_env}{suffix} set", False
 
 
 def _precheck_api_spec(spec: BenchmarkModelSpec) -> Optional[str]:

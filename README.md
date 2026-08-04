@@ -130,11 +130,13 @@ export LLAMA_CLOUD_API_KEY="your_llamacloud_key_here"
 - `OPENAI_API_KEY` (for direct OpenAI access)
 - `ANTHROPIC_API_KEY` (for direct Anthropic access)
 - `GEMINI_API_KEY` or `GOOGLE_API_KEY` (for direct Google access)
+- `FIREWORKS_API_KEY` (for Fireworks-hosted open-weight vision models like Qwen3-VL - get from https://fireworks.ai)
 - `LLAMA_CLOUD_API_KEY` (for LlamaParse extraction - get from https://cloud.llamaindex.ai)
 
 **Note:** You only need at least one API key to use the tool. OpenRouter
 is recommended as it provides access to all supported models through a
 single API. For LlamaParse extraction, you need a separate `LLAMA_CLOUD_API_KEY`.
+Local extraction (`--local`) needs no key at all.
 
 The tool defaults to using OpenRouter when available, with automatic 
 fallback to direct provider APIs. If your requested model is unavailable, 
@@ -173,6 +175,26 @@ Then `chmod +x ~/bin/pdf_to_md` and ensure that directory is in your `PATH`. You
 
 Convert PDF files to Markdown format using LLM vision models. It supports processing a single file or multiple files within a directory, optionally in parallel. The script provides several options including model selection, provider choice, output directory specification, processing modes, verbosity, and recursive directory processing.
 
+### Default provider & model
+
+| | Value |
+|---|---|
+| **Default model** | `gpt-5.5` |
+| **Default provider** | OpenAI **direct API** (uses `OPENAI_API_KEY`) |
+| **Required key for the default** | `OPENAI_API_KEY` |
+
+The tool uses **direct provider APIs by default** (not OpenRouter). Pass `--prefer-openrouter` to route through OpenRouter instead when `OPENROUTER_API_KEY` is set. If the requested model's key is missing, you'll be prompted to pick from the models your available keys support.
+
+**Change the default locally (no code edits):** set `PDF_TO_MD_MODEL` in your `.env` (or shell) to any `models.json` key, and provide the matching provider key. This is what `--model` falls back to when you don't pass it. For example, to make Fireworks' Qwen3-VL your personal default:
+
+```bash
+# .env
+FIREWORKS_API_KEY=your_fireworks_key_here
+PDF_TO_MD_MODEL=qwen3-vl-235b
+```
+
+Now `./pdf_to_md.py document.pdf` runs on Fireworks Qwen3-VL with no flags. `--model` / `--fireworks` / `--local` still override it per run. Run `./pdf_to_md.py --list-models` to see every model and which is the default.
+
 The PDF pipeline is:
 
 1. Extract per-page first-pass text with a digital text parser
@@ -182,7 +204,7 @@ The PDF pipeline is:
 
 ### Basic Usage
 
-To convert a PDF file (defaults to OpenAI GPT-5.4 via OpenRouter):
+To convert a PDF file (defaults to OpenAI GPT-5.5 via the direct OpenAI API):
 
 ```bash
 ./pdf_to_md.py <path_to_pdf>
@@ -204,9 +226,11 @@ To utilize additional options:
 - `-o`, `--output_dir <output_directory>`: Destination for Markdown files. Defaults to PDF's location if unspecified.
 - `-m`, `--mode <mode>`: Sets processing mode. Choose 'v' for vision-only or 'vt' for vision-and-text (default: 'vt').
 - `--digital-text-parser <parser>`: Parser engine used for first-pass digital text parsing in `vt` mode. Options: `auto` (default), `pypdf`, `pymupdf`.
-- `--model <model>`: Model identifier from `models.json` to use for both vision and text processing (default: `gpt-5.5`).
-- `--provider <provider>`: Force specific provider: `openrouter`, `openai`, `anthropic`, or `google` (optional).
+- `--model <model>`: Model identifier from `models.json` to use for both vision and text processing (default: `gpt-5.5`, or the `PDF_TO_MD_MODEL` env var if set).
+- `--provider <provider>`: Force specific provider: `openrouter`, `openai`, `anthropic`, `google`, or `fireworks` (optional).
 - `--prefer-openrouter`: Route via OpenRouter when available. Default is to use direct provider APIs.
+- `--fireworks`: Use Fireworks AI with a strong open-weight vision model (default `qwen3-vl-235b`). Requires `FIREWORKS_API_KEY`. Shortcut for `--model <fireworks-model>`.
+- `--fireworks-model <model>`: Which Fireworks model (`models.json` key) `--fireworks` uses. Default `qwen3-vl-235b`; also `qwen3-vl-32b`, `qwen3.7-plus`.
 - `-q`, `--quiet`: Disables verbose output. By default, the script prints markdown to console.
 - `-r`, `--recursive`: Processes all PDF files within the target directory recursively. Files are processed in parallel by default.
 - `-s`, `--single`: Process files sequentially instead of in parallel when using `-r`.
@@ -237,6 +261,9 @@ To utilize additional options:
 - `claude-opus-4.5` - Anthropic Claude Opus 4.5
 - `claude-opus-4.6` - Anthropic Claude Opus 4.6
 - `claude-haiku-4.5` - Anthropic Claude Haiku 4.5
+- `qwen3-vl-235b` - Qwen3-VL 235B-A22B Instruct via Fireworks (default for `--fireworks`)
+- `qwen3-vl-32b` - Qwen3-VL 32B Instruct via Fireworks
+- `qwen3.7-plus` - Qwen 3.7 Plus (multimodal flagship) via Fireworks
 
 **Examples:**
 
@@ -249,6 +276,12 @@ To utilize additional options:
 
 # Use Gemini 3 Pro
 ./pdf_to_md.py document.pdf --model gemini-3-pro
+
+# Use Fireworks (open-weight Qwen3-VL, requires FIREWORKS_API_KEY)
+./pdf_to_md.py document.pdf --fireworks
+
+# Use a specific Fireworks model
+./pdf_to_md.py document.pdf --fireworks --fireworks-model qwen3.7-plus
 
 # Route via OpenRouter instead of direct provider APIs
 ./pdf_to_md.py document.pdf --model claude-sonnet-4.5 --prefer-openrouter
@@ -437,11 +470,29 @@ moved or shared as-is.
 
 ### Provider Selection
 
-The tool automatically selects the best provider based on available API keys:
+Each model in `models.json` has a home provider. The tool routes to it based on the model you pick and the keys you have:
 
-1. **OpenRouter** (if `OPENROUTER_API_KEY` is set) - Supports all models
-2. **Direct Provider APIs** - Falls back to direct APIs if OpenRouter unavailable
-3. **Interactive Fallback** - If requested model is unavailable, you'll be prompted to select from available alternatives
+1. **Direct Provider APIs** (default) - OpenAI, Anthropic, Google, and **Fireworks** models go straight to that provider's API using its key (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`/`GEMINI_API_KEY`, `FIREWORKS_API_KEY`).
+2. **OpenRouter** - Pass `--prefer-openrouter` (with `OPENROUTER_API_KEY` set) to route models that have an OpenRouter ID through OpenRouter instead. Fireworks-hosted models resolve directly to Fireworks and are not routed via OpenRouter.
+3. **Interactive Fallback** - If the requested model's key is missing, you'll be prompted to select from the models your available keys support.
+
+### Fireworks AI (`--fireworks`)
+
+[Fireworks](https://fireworks.ai) hosts open-weight (and some licensed) models behind an OpenAI-compatible API — most relevantly the **Qwen3-VL** family, which is strong at document OCR. It's the low-ops cloud counterpart to `--local`: same class of open models, but on Fireworks' GPUs, with per-token pricing and nothing to install.
+
+```bash
+# Set FIREWORKS_API_KEY, then:
+./pdf_to_md.py document.pdf --fireworks
+```
+
+Default model is `qwen3-vl-235b` (Qwen3-VL 235B-A22B Instruct) — an *instruct* model (no reasoning/"thinking" overhead) with 32-language OCR, and a 22B-active MoE so it's inexpensive (~$0.20/$0.88 per M tokens). Alternatives via `--fireworks-model`: `qwen3-vl-32b`, or `qwen3.7-plus` (the multimodal flagship; note it's a reasoning model). Fireworks models are also plain `models.json` keys, so they work anywhere a model is accepted, including `--benchmark`:
+
+```bash
+# Benchmark Fireworks Qwen3-VL against OpenAI, Anthropic, and a local model
+./pdf_to_md.py --benchmark \
+  --benchmark-models "gpt-5.5,claude-opus-4.6,qwen3-vl-235b,local" \
+  --benchmark-pdf document.pdf
+```
 
 ## Testing
 

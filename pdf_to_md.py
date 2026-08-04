@@ -23,6 +23,30 @@ def _get_version() -> str:
     except Exception:  # pragma: no cover
         return "0.0.0.dev"
 
+
+# Overall default model when neither --model nor PDF_TO_MD_MODEL is set. To make
+# a different model your personal default, set PDF_TO_MD_MODEL in your .env
+# (e.g. PDF_TO_MD_MODEL=qwen3-vl-235b) along with the matching provider key.
+DEFAULT_MODEL = "gpt-5.5"
+_FIREWORKS_FALLBACK_MODEL = "qwen3-vl-235b"
+
+
+def _default_model() -> str:
+    """Return the default model, honoring the PDF_TO_MD_MODEL override."""
+    return os.getenv("PDF_TO_MD_MODEL", DEFAULT_MODEL)
+
+
+def _default_fireworks_model() -> str:
+    """Return the default Fireworks model (the one flagged in models.json)."""
+    try:
+        from models_config import load_models_config
+        for name, cfg in load_models_config().items():
+            if cfg.get("fireworks_default"):
+                return name
+    except Exception:  # pragma: no cover - fall back if config unavailable
+        pass
+    return _FIREWORKS_FALLBACK_MODEL
+
 if TYPE_CHECKING:
     from llm_providers import BaseProvider
     from extractors import BaseExtractor
@@ -534,14 +558,14 @@ def main() -> None:
     parser.add_argument(
         "--model",
         type=str,
-        default="gpt-5.5",
+        default=_default_model(),
         help="Model identifier from models.json to use for both vision and text "
-        "processing (default: gpt-5.5).",
+        "processing. Defaults to gpt-5.5, or the PDF_TO_MD_MODEL env var if set.",
     )
     parser.add_argument(
         "--provider",
         type=str,
-        choices=["openrouter", "openai", "anthropic", "google"],
+        choices=["openrouter", "openai", "anthropic", "google", "fireworks"],
         default=None,
         help="Force specific provider (optional).",
     )
@@ -591,6 +615,21 @@ def main() -> None:
         default="vision",
         help="Extraction method: 'vision' (LLM-based, default) or 'llamaparse' "
         "(LlamaCloud API). Ignored when --local is set.",
+    )
+    parser.add_argument(
+        "--fireworks",
+        action="store_true",
+        default=False,
+        help="Use Fireworks AI as the provider with a strong open-weight vision "
+        "model (default: qwen3-vl-235b). Requires FIREWORKS_API_KEY. Shortcut "
+        "for '--model <fireworks-model>'; pick the model with --fireworks-model.",
+    )
+    parser.add_argument(
+        "--fireworks-model",
+        type=str,
+        default=_default_fireworks_model(),
+        help="Fireworks model (models.json key) to use with --fireworks "
+        "(default: qwen3-vl-235b). Other options: qwen3-vl-32b, qwen3.7-plus.",
     )
     parser.add_argument(
         "--local",
@@ -740,12 +779,28 @@ def main() -> None:
     ):
         parser.error("target_path is required unless using --list-models")
 
-    # Extract configuration from args
-    model = args.model
+    # --fireworks and --local both select where inference runs; refuse both.
+    if args.local and args.fireworks:
+        parser.error("--local and --fireworks are mutually exclusive.")
+
+    # Extract configuration from args. --fireworks is a shortcut that swaps in a
+    # Fireworks vision model, which then resolves to FireworksProvider normally.
+    model = args.fireworks_model if args.fireworks else args.model
     prefer_openrouter = args.prefer_openrouter
 
     # Print configuration
     print_cli_configuration(args, model)
+
+    # Fail fast with a clear message rather than dropping into the interactive
+    # fallback menu when --fireworks is used without a key.
+    if args.fireworks:
+        from llm_providers import get_available_providers
+        if not get_available_providers().get("fireworks"):
+            print(
+                "Error: --fireworks requires FIREWORKS_API_KEY. Get a key at "
+                "https://fireworks.ai and set it in your .env or environment."
+            )
+            sys.exit(1)
 
     if args.benchmark:
         from benchmark_models import (

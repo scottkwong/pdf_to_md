@@ -154,6 +154,88 @@ class OpenRouterProvider(BaseProvider):
         )
 
 
+class FireworksProvider(BaseProvider):
+    """Provider for Fireworks AI (OpenAI-compatible, open-weight vision models).
+
+    Fireworks serves open-weight and licensed models (Qwen-VL, etc.) behind an
+    OpenAI-compatible API, so this mirrors OpenRouterProvider: same chat schema
+    and base64 data-URL images, just a different base URL and key. It does not
+    provide access to proprietary OpenAI/Anthropic/Google models.
+    """
+
+    BASE_URL = "https://api.fireworks.ai/inference/v1"
+
+    def __init__(self, api_key: Optional[str] = None):
+        """
+        Initialize Fireworks provider.
+
+        Args:
+            api_key: Fireworks API key. If None, reads from FIREWORKS_API_KEY.
+        """
+        self.api_key = api_key or os.getenv("FIREWORKS_API_KEY")
+        if not self.api_key:
+            raise ValueError("FIREWORKS_API_KEY not found in environment")
+        self.client = OpenAI(api_key=self.api_key, base_url=self.BASE_URL)
+
+    def process_vision(
+        self,
+        image_base64: str,
+        prompt: str,
+        prior_text: Optional[str] = None,
+        model: str = "",
+        max_tokens: int = 4096,
+    ) -> VisionResult:
+        """
+        Process image using the Fireworks OpenAI-compatible API.
+
+        Args:
+            image_base64: Base64-encoded image string.
+            prompt: Text prompt for the model.
+            prior_text: Optional prior text for context.
+            model: Fireworks model path (e.g.
+                "accounts/fireworks/models/qwen3-vl-235b-a22b-instruct").
+            max_tokens: Maximum tokens in response.
+
+        Returns:
+            VisionResult with text and token usage.
+        """
+        if not model:
+            raise ValueError("Model must be specified for Fireworks")
+
+        full_prompt = prompt
+        if prior_text:
+            full_prompt = f"{prompt}\n\n<prior_text>\n{prior_text}\n</prior_text>"
+
+        response = self.client.chat.completions.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": full_prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{image_base64}"
+                            },
+                        },
+                    ],
+                }
+            ],
+        )
+
+        usage = TokenUsage()
+        if response.usage:
+            usage.input_tokens = response.usage.prompt_tokens or 0
+            usage.output_tokens = response.usage.completion_tokens or 0
+
+        return VisionResult(
+            text=response.choices[0].message.content,
+            usage=usage,
+        )
+
+
 class OpenAIProvider(BaseProvider):
     """Provider for direct OpenAI API."""
 
@@ -464,6 +546,7 @@ def get_available_providers(validate_keys: bool = False) -> Dict[str, bool]:
         "google": bool(
             os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
         ),
+        "fireworks": bool(os.getenv("FIREWORKS_API_KEY")),
     }
 
     # If validate_keys is True, actually test the OpenRouter key
@@ -610,6 +693,9 @@ def resolve_model(
     elif provider_name == "google" and available["google"]:
         model_id = model_config["direct_id"]
         provider = GoogleProvider()
+    elif provider_name == "fireworks" and available["fireworks"]:
+        model_id = model_config["direct_id"]
+        provider = FireworksProvider()
     else:
         # No API key available - try fallback
         available_models = get_available_models_for_keys()
