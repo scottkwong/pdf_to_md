@@ -88,20 +88,6 @@
     "input_cost_per_mtok": 1.00,
     "output_cost_per_mtok": 5.00
   },
-  "qwen3-vl-32b": {
-    "provider": "fireworks",
-    "direct_id": "accounts/fireworks/models/qwen3-vl-32b-instruct",
-    "supports_vision": true,
-    "input_cost_per_mtok": 0.90,
-    "output_cost_per_mtok": 0.90
-  },
-  "qwen3-vl-8b": {
-    "provider": "fireworks",
-    "direct_id": "accounts/fireworks/models/qwen3-vl-8b-instruct",
-    "supports_vision": true,
-    "input_cost_per_mtok": 0.20,
-    "output_cost_per_mtok": 0.20
-  },
   "qwen3.7-plus": {
     "provider": "fireworks",
     "direct_id": "accounts/fireworks/models/qwen3p7-plus",

@@ -20,12 +20,20 @@ from llm_providers import (  # noqa: E402
 )
 
 
-def _fake_openai_response(text: str, prompt_tokens: int, completion_tokens: int):
+def _fake_openai_response(
+    text: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    finish_reason: str = "stop",
+    reasoning_content=None,
+):
     """Build a stub mimicking the OpenAI chat.completions response shape."""
     message = mock.Mock()
     message.content = text
+    message.reasoning_content = reasoning_content
     choice = mock.Mock()
     choice.message = message
+    choice.finish_reason = finish_reason
     usage = mock.Mock()
     usage.prompt_tokens = prompt_tokens
     usage.completion_tokens = completion_tokens
@@ -66,7 +74,7 @@ def test_provider_uses_fireworks_base_url_and_vision_shape() -> None:
             image_base64="QUJD",
             prompt="Convert to markdown",
             prior_text="prior text",
-            model="accounts/fireworks/models/qwen3-vl-32b-instruct",
+            model="accounts/fireworks/models/qwen3p7-plus",
             max_tokens=4096,
         )
 
@@ -75,7 +83,9 @@ def test_provider_uses_fireworks_base_url_and_vision_shape() -> None:
         assert result.usage.output_tokens == 300
 
         call_kwargs = fake_client.chat.completions.create.call_args.kwargs
-        assert call_kwargs["model"].endswith("qwen3-vl-32b-instruct")
+        assert call_kwargs["model"].endswith("qwen3p7-plus")
+        # Reasoning headroom: the request asks for more than the caller's 4096.
+        assert call_kwargs["max_tokens"] == FireworksProvider.REASONING_TOKEN_HEADROOM
         content = call_kwargs["messages"][0]["content"]
         text_part = next(p for p in content if p["type"] == "text")
         image_part = next(p for p in content if p["type"] == "image_url")
@@ -93,6 +103,29 @@ def test_provider_rejects_empty_model() -> None:
             assert "Fireworks" in str(error)
         else:  # pragma: no cover
             raise AssertionError("Expected ValueError for empty model")
+
+
+def test_provider_raises_on_reasoning_truncation() -> None:
+    """finish_reason=length with no reasoning_content means the thinking was
+    truncated and `content` holds thinking text, not the answer — raise."""
+    with mock.patch.object(llm_providers, "OpenAI") as fake_openai_cls:
+        fake_client = fake_openai_cls.return_value
+        fake_client.chat.completions.create.return_value = _fake_openai_response(
+            "Thinking Process:\n\n1. Analyze...",
+            prompt_tokens=2000,
+            completion_tokens=16384,
+            finish_reason="length",
+            reasoning_content=None,
+        )
+        provider = FireworksProvider(api_key="test-key")
+        try:
+            provider.process_vision(
+                image_base64="QUJD", prompt="x", model="m", max_tokens=4096
+            )
+        except ValueError as error:
+            assert "truncated during reasoning" in str(error)
+        else:  # pragma: no cover
+            raise AssertionError("Expected ValueError on reasoning truncation")
 
 
 def test_available_providers_includes_fireworks() -> None:
@@ -119,9 +152,9 @@ def test_resolve_model_routes_fireworks_to_fireworks_provider() -> None:
             "fireworks": True,
         },
     ):
-        model_id, provider = resolve_model("qwen3-vl-32b", prefer_openrouter=False)
+        model_id, provider = resolve_model("qwen3.7-plus", prefer_openrouter=False)
     assert isinstance(provider, FireworksProvider)
-    assert model_id == "accounts/fireworks/models/qwen3-vl-32b-instruct"
+    assert model_id == "accounts/fireworks/models/qwen3p7-plus"
 
 
 def test_models_json_has_fireworks_default() -> None:
@@ -147,8 +180,8 @@ def test_default_model_honors_env_override() -> None:
     with mock.patch.dict(os.environ, {}, clear=False):
         os.environ.pop("PDF_TO_MD_MODEL", None)
         assert pdf_to_md._default_model() == "gpt-5.5"
-    with mock.patch.dict(os.environ, {"PDF_TO_MD_MODEL": "qwen3-vl-32b"}, clear=False):
-        assert pdf_to_md._default_model() == "qwen3-vl-32b"
+    with mock.patch.dict(os.environ, {"PDF_TO_MD_MODEL": "qwen3.7-plus"}, clear=False):
+        assert pdf_to_md._default_model() == "qwen3.7-plus"
     assert pdf_to_md._default_fireworks_model() == "qwen3.7-plus"
 
 
@@ -157,6 +190,7 @@ def run_all_tests() -> bool:
     test_provider_requires_key()
     test_provider_uses_fireworks_base_url_and_vision_shape()
     test_provider_rejects_empty_model()
+    test_provider_raises_on_reasoning_truncation()
     test_available_providers_includes_fireworks()
     test_resolve_model_routes_fireworks_to_fireworks_provider()
     test_models_json_has_fireworks_default()

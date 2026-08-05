@@ -130,7 +130,7 @@ export LLAMA_CLOUD_API_KEY="your_llamacloud_key_here"
 - `OPENAI_API_KEY` (for direct OpenAI access)
 - `ANTHROPIC_API_KEY` (for direct Anthropic access)
 - `GEMINI_API_KEY` or `GOOGLE_API_KEY` (for direct Google access)
-- `FIREWORKS_API_KEY` (for Fireworks-hosted open-weight vision models like Qwen3-VL - get from https://fireworks.ai)
+- `FIREWORKS_API_KEY` (for Fireworks-hosted open-weight multimodal models like Qwen 3.7 Plus - get from https://fireworks.ai)
 - `LLAMA_CLOUD_API_KEY` (for LlamaParse extraction - get from https://cloud.llamaindex.ai)
 
 **Note:** You only need at least one API key to use the tool. OpenRouter
@@ -230,7 +230,7 @@ To utilize additional options:
 - `--provider <provider>`: Force specific provider: `openrouter`, `openai`, `anthropic`, `google`, or `fireworks` (optional).
 - `--prefer-openrouter`: Route via OpenRouter when available. Default is to use direct provider APIs.
 - `--fireworks`: Use Fireworks AI with a capable multimodal model (default `qwen3.7-plus`). Requires `FIREWORKS_API_KEY`. Shortcut for `--model <fireworks-model>`.
-- `--fireworks-model <model>`: Which Fireworks model (`models.json` key) `--fireworks` uses. Default `qwen3.7-plus`; also `qwen3-vl-32b`, `qwen3-vl-8b`.
+- `--fireworks-model <model>`: Which Fireworks model (`models.json` key) `--fireworks` uses. Default `qwen3.7-plus`.
 - `-q`, `--quiet`: Disables verbose output. By default, the script prints markdown to console.
 - `-r`, `--recursive`: Processes all PDF files within the target directory recursively. Files are processed in parallel by default.
 - `-s`, `--single`: Process files sequentially instead of in parallel when using `-r`.
@@ -262,8 +262,6 @@ To utilize additional options:
 - `claude-opus-4.6` - Anthropic Claude Opus 4.6
 - `claude-haiku-4.5` - Anthropic Claude Haiku 4.5
 - `qwen3.7-plus` - Qwen 3.7 Plus (multimodal flagship) via Fireworks (default for `--fireworks`)
-- `qwen3-vl-32b` - Qwen3-VL 32B Instruct via Fireworks
-- `qwen3-vl-8b` - Qwen3-VL 8B Instruct via Fireworks (cheaper)
 
 **Examples:**
 
@@ -277,7 +275,7 @@ To utilize additional options:
 # Use Gemini 3 Pro
 ./pdf_to_md.py document.pdf --model gemini-3-pro
 
-# Use Fireworks (open-weight Qwen3-VL, requires FIREWORKS_API_KEY)
+# Use Fireworks (Qwen 3.7 Plus, requires FIREWORKS_API_KEY)
 ./pdf_to_md.py document.pdf --fireworks
 
 # Use a specific Fireworks model
@@ -478,17 +476,17 @@ Each model in `models.json` has a home provider. The tool routes to it based on 
 
 ### Fireworks AI (`--fireworks`)
 
-[Fireworks](https://fireworks.ai) hosts open-weight (and some licensed) models behind an OpenAI-compatible API — most relevantly the **Qwen3-VL** family, which is strong at document OCR. It's the low-ops cloud counterpart to `--local`: same class of open models, but on Fireworks' GPUs, with per-token pricing and nothing to install.
+[Fireworks](https://fireworks.ai) hosts open-weight (and some licensed) models behind an OpenAI-compatible API. It's the low-ops cloud counterpart to `--local`: same class of open models, but on Fireworks' GPUs, with per-token pricing and nothing to install.
 
 ```bash
 # Set FIREWORKS_API_KEY, then:
 ./pdf_to_md.py document.pdf --fireworks
 ```
 
-Default model is `qwen3.7-plus` (Qwen 3.7 Plus) — Alibaba's flagship multimodal model, served **serverless** (pay-per-token) on Fireworks with image input, so it works with just a key. Note it is a *reasoning* model (thinking mode), which can add latency and output tokens versus a plain OCR model. For a dedicated vision-language *instruct* alternative with no thinking overhead, use `--fireworks-model qwen3-vl-32b` (or `qwen3-vl-8b`, cheaper) — both also serverless. The larger `qwen3-vl-235b-a22b-instruct` is **not** offered here because on Fireworks it requires an on-demand GPU deployment rather than serverless per-token access, so a plain API key can't call it. Fireworks models are plain `models.json` keys, so they work anywhere a model is accepted, including `--benchmark`:
+Default model is `qwen3.7-plus` (Qwen 3.7 Plus) — Alibaba's flagship multimodal model, served **serverless** (pay-per-token) on Fireworks with image input, so it works with just a key. It is a *reasoning* model (thinking mode), which adds latency and billed output tokens versus a plain OCR model; the reasoning is returned in a separate field, so extracted markdown stays clean. The Qwen3-VL *instruct* family (8B/32B/235B) is **not** offered here: Fireworks' serverless catalog does not include those models — they require an on-demand GPU deployment, which a plain API key can't call. `qwen3.7-plus` is the only serverless Qwen vision option. Fireworks models are plain `models.json` keys, so they work anywhere a model is accepted, including `--benchmark`:
 
 ```bash
-# Benchmark Fireworks Qwen3-VL against OpenAI, Anthropic, and a local model
+# Benchmark Fireworks Qwen 3.7 Plus against OpenAI, Anthropic, and a local model
 ./pdf_to_md.py --benchmark \
   --benchmark-models "gpt-5.5,claude-opus-4.6,qwen3.7-plus,local" \
   --benchmark-pdf document.pdf

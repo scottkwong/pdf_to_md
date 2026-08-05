@@ -165,6 +165,11 @@ class FireworksProvider(BaseProvider):
 
     BASE_URL = "https://api.fireworks.ai/inference/v1"
 
+    # Reasoning models (e.g. qwen3p7-plus) spend completion budget on thinking
+    # before the answer, so dense pages truncate mid-thought at 4096. Request
+    # at least this much; only generated tokens are billed.
+    REASONING_TOKEN_HEADROOM = 16384
+
     def __init__(self, api_key: Optional[str] = None):
         """
         Initialize Fireworks provider.
@@ -193,7 +198,7 @@ class FireworksProvider(BaseProvider):
             prompt: Text prompt for the model.
             prior_text: Optional prior text for context.
             model: Fireworks model path (e.g.
-                "accounts/fireworks/models/qwen3-vl-235b-a22b-instruct").
+                "accounts/fireworks/models/qwen3p7-plus").
             max_tokens: Maximum tokens in response.
 
         Returns:
@@ -206,9 +211,10 @@ class FireworksProvider(BaseProvider):
         if prior_text:
             full_prompt = f"{prompt}\n\n<prior_text>\n{prior_text}\n</prior_text>"
 
+        effective_max_tokens = max(max_tokens, self.REASONING_TOKEN_HEADROOM)
         response = self.client.chat.completions.create(
             model=model,
-            max_tokens=max_tokens,
+            max_tokens=effective_max_tokens,
             messages=[
                 {
                     "role": "user",
@@ -225,13 +231,28 @@ class FireworksProvider(BaseProvider):
             ],
         )
 
+        choice = response.choices[0]
+        # When a reasoning model exhausts the budget mid-thought, Fireworks
+        # returns the partial thinking in `content` (reasoning_content stays
+        # None). Raise so the caller's retry gets another sample instead of
+        # writing thinking text into the markdown output.
+        if (
+            choice.finish_reason == "length"
+            and getattr(choice.message, "reasoning_content", None) is None
+        ):
+            raise ValueError(
+                "Fireworks response truncated during reasoning "
+                f"(finish_reason=length at {effective_max_tokens} tokens); "
+                "no answer was produced."
+            )
+
         usage = TokenUsage()
         if response.usage:
             usage.input_tokens = response.usage.prompt_tokens or 0
             usage.output_tokens = response.usage.completion_tokens or 0
 
         return VisionResult(
-            text=response.choices[0].message.content,
+            text=choice.message.content,
             usage=usage,
         )
 
