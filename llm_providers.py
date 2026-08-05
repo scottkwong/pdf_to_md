@@ -18,6 +18,8 @@ from dotenv import load_dotenv
 from openai import OpenAI
 import google.genai as genai
 
+from models_config import Provider
+
 # Load environment variables
 load_dotenv()
 
@@ -150,6 +152,109 @@ class OpenRouterProvider(BaseProvider):
 
         return VisionResult(
             text=response.choices[0].message.content,
+            usage=usage,
+        )
+
+
+class FireworksProvider(BaseProvider):
+    """Provider for Fireworks AI (OpenAI-compatible, open-weight vision models).
+
+    Fireworks serves open-weight and licensed models (Qwen-VL, etc.) behind an
+    OpenAI-compatible API, so this mirrors OpenRouterProvider: same chat schema
+    and base64 data-URL images, just a different base URL and key. It does not
+    provide access to proprietary OpenAI/Anthropic/Google models.
+    """
+
+    BASE_URL = "https://api.fireworks.ai/inference/v1"
+
+    # Reasoning models (e.g. qwen3p7-plus) spend completion budget on thinking
+    # before the answer, so dense pages truncate mid-thought at 4096. Request
+    # at least this much; only generated tokens are billed.
+    REASONING_TOKEN_HEADROOM = 16384
+
+    def __init__(self, api_key: Optional[str] = None):
+        """
+        Initialize Fireworks provider.
+
+        Args:
+            api_key: Fireworks API key. If None, reads from FIREWORKS_API_KEY.
+        """
+        self.api_key = api_key or os.getenv("FIREWORKS_API_KEY")
+        if not self.api_key:
+            raise ValueError("FIREWORKS_API_KEY not found in environment")
+        self.client = OpenAI(api_key=self.api_key, base_url=self.BASE_URL)
+
+    def process_vision(
+        self,
+        image_base64: str,
+        prompt: str,
+        prior_text: Optional[str] = None,
+        model: str = "",
+        max_tokens: int = 4096,
+    ) -> VisionResult:
+        """
+        Process image using the Fireworks OpenAI-compatible API.
+
+        Args:
+            image_base64: Base64-encoded image string.
+            prompt: Text prompt for the model.
+            prior_text: Optional prior text for context.
+            model: Fireworks model path (e.g.
+                "accounts/fireworks/models/qwen3p7-plus").
+            max_tokens: Maximum tokens in response.
+
+        Returns:
+            VisionResult with text and token usage.
+        """
+        if not model:
+            raise ValueError("Model must be specified for Fireworks")
+
+        full_prompt = prompt
+        if prior_text:
+            full_prompt = f"{prompt}\n\n<prior_text>\n{prior_text}\n</prior_text>"
+
+        effective_max_tokens = max(max_tokens, self.REASONING_TOKEN_HEADROOM)
+        response = self.client.chat.completions.create(
+            model=model,
+            max_tokens=effective_max_tokens,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": full_prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{image_base64}"
+                            },
+                        },
+                    ],
+                }
+            ],
+        )
+
+        choice = response.choices[0]
+        # When a reasoning model exhausts the budget mid-thought, Fireworks
+        # returns the partial thinking in `content` (reasoning_content stays
+        # None). Raise so the caller's retry gets another sample instead of
+        # writing thinking text into the markdown output.
+        if (
+            choice.finish_reason == "length"
+            and getattr(choice.message, "reasoning_content", None) is None
+        ):
+            raise ValueError(
+                "Fireworks response truncated during reasoning "
+                f"(finish_reason=length at {effective_max_tokens} tokens); "
+                "no answer was produced."
+            )
+
+        usage = TokenUsage()
+        if response.usage:
+            usage.input_tokens = response.usage.prompt_tokens or 0
+            usage.output_tokens = response.usage.completion_tokens or 0
+
+        return VisionResult(
+            text=choice.message.content,
             usage=usage,
         )
 
@@ -458,18 +563,19 @@ def get_available_providers(validate_keys: bool = False) -> Dict[str, bool]:
         Dictionary mapping provider names to availability (True/False).
     """
     providers = {
-        "openrouter": bool(os.getenv("OPENROUTER_API_KEY")),
-        "openai": bool(os.getenv("OPENAI_API_KEY")),
-        "anthropic": bool(os.getenv("ANTHROPIC_API_KEY")),
-        "google": bool(
+        Provider.OPENROUTER.value: bool(os.getenv("OPENROUTER_API_KEY")),
+        Provider.OPENAI.value: bool(os.getenv("OPENAI_API_KEY")),
+        Provider.ANTHROPIC.value: bool(os.getenv("ANTHROPIC_API_KEY")),
+        Provider.GOOGLE.value: bool(
             os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
         ),
+        Provider.FIREWORKS.value: bool(os.getenv("FIREWORKS_API_KEY")),
     }
 
     # If validate_keys is True, actually test the OpenRouter key
-    if validate_keys and providers["openrouter"]:
+    if validate_keys and providers[Provider.OPENROUTER.value]:
         api_key = os.getenv("OPENROUTER_API_KEY")
-        providers["openrouter"] = validate_openrouter_key(api_key)
+        providers[Provider.OPENROUTER.value] = validate_openrouter_key(api_key)
 
     return providers
 
@@ -505,13 +611,13 @@ def get_available_models_for_keys() -> List[Dict]:
             {
                 "name": name,
                 "display_name": openrouter_id,
-                "provider": "openrouter",
+                "provider": Provider.OPENROUTER.value,
             }
         )
         return True
 
     # If OpenRouter is available, use models with OpenRouter IDs first
-    if available["openrouter"]:
+    if available[Provider.OPENROUTER]:
         for model_name, model_config in models_config.items():
             if add_openrouter_model(model_name, model_config):
                 continue
@@ -597,19 +703,22 @@ def resolve_model(
     # Determine which provider to use
     use_openrouter = False
     openrouter_id = model_config.get("openrouter_id")
-    if prefer_openrouter and available["openrouter"] and openrouter_id:
+    if prefer_openrouter and available[Provider.OPENROUTER] and openrouter_id:
         use_openrouter = True
         model_id = openrouter_id
         provider = OpenRouterProvider()
-    elif provider_name == "openai" and available["openai"]:
+    elif provider_name == Provider.OPENAI and available[Provider.OPENAI]:
         model_id = model_config["direct_id"]
         provider = OpenAIProvider()
-    elif provider_name == "anthropic" and available["anthropic"]:
+    elif provider_name == Provider.ANTHROPIC and available[Provider.ANTHROPIC]:
         model_id = model_config["direct_id"]
         provider = AnthropicProvider()
-    elif provider_name == "google" and available["google"]:
+    elif provider_name == Provider.GOOGLE and available[Provider.GOOGLE]:
         model_id = model_config["direct_id"]
         provider = GoogleProvider()
+    elif provider_name == Provider.FIREWORKS and available[Provider.FIREWORKS]:
+        model_id = model_config["direct_id"]
+        provider = FireworksProvider()
     else:
         # No API key available - try fallback
         available_models = get_available_models_for_keys()

@@ -87,5 +87,13 @@
     "supports_vision": true,
     "input_cost_per_mtok": 1.00,
     "output_cost_per_mtok": 5.00
+  },
+  "qwen3.7-plus": {
+    "provider": "fireworks",
+    "direct_id": "accounts/fireworks/models/qwen3p7-plus",
+    "supports_vision": true,
+    "fireworks_default": true,
+    "input_cost_per_mtok": 0.40,
+    "output_cost_per_mtok": 1.60
   }
 }
