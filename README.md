@@ -263,6 +263,11 @@ To utilize additional options:
 - `claude-haiku-4.5` - Anthropic Claude Haiku 4.5
 - `qwen3.7-plus` - Qwen 3.7 Plus (multimodal flagship) via Fireworks (default for `--fireworks`)
 
+**Model quality notes** (2026.08.05, 10-page slide-deck benchmark):
+- The top-tier OpenAI model (`gpt-5.5`) is generally the best.
+- `qwen3.7-plus` via Fireworks is slightly worse than `gpt-5.5`, at ~12% of the cost.
+- Local `qwen3-vl:8b` (Ollama, `--local`) is noticeably worse than `qwen3.7-plus`, but it's local and free, and better than local `qwen2.5vl:7b`.
+
 **Examples:**
 
 ```bash
