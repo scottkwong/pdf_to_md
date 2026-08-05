@@ -26,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import List, Optional
 
+from models_config import Provider
 from local_ocr import (
     DEFAULT_LOCAL_MODEL,
     DEFAULT_NUM_CTX,
@@ -262,7 +263,7 @@ def _resolve_api_routing(spec: BenchmarkModelSpec):
     has_openrouter_id = bool(config[spec.model].get("openrouter_id"))
     available = get_available_providers()
 
-    openrouter_ok = available.get("openrouter") and has_openrouter_id
+    openrouter_ok = available.get(Provider.OPENROUTER) and has_openrouter_id
     direct_ok = available.get(provider_name)
 
     if spec.prefer_openrouter and openrouter_ok:
@@ -274,10 +275,10 @@ def _resolve_api_routing(spec: BenchmarkModelSpec):
         return None, True
 
     key_env = {
-        "openai": "OPENAI_API_KEY",
-        "anthropic": "ANTHROPIC_API_KEY",
-        "google": "GOOGLE_API_KEY/GEMINI_API_KEY",
-        "fireworks": "FIREWORKS_API_KEY",
+        Provider.OPENAI.value: "OPENAI_API_KEY",
+        Provider.ANTHROPIC.value: "ANTHROPIC_API_KEY",
+        Provider.GOOGLE.value: "GOOGLE_API_KEY/GEMINI_API_KEY",
+        Provider.FIREWORKS.value: "FIREWORKS_API_KEY",
     }.get(provider_name, f"{provider_name} API key")
     # Only mention OpenRouter when the model could actually route through it.
     suffix = " or OPENROUTER_API_KEY" if has_openrouter_id else ""

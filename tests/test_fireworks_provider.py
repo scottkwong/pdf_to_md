@@ -18,6 +18,7 @@ from llm_providers import (  # noqa: E402
     load_models_config,
     resolve_model,
 )
+from models_config import ModelKey, Provider  # noqa: E402
 
 
 def _fake_openai_response(
@@ -131,10 +132,10 @@ def test_provider_raises_on_reasoning_truncation() -> None:
 def test_available_providers_includes_fireworks() -> None:
     """get_available_providers reports fireworks based on FIREWORKS_API_KEY."""
     with mock.patch.dict(os.environ, {"FIREWORKS_API_KEY": "k"}, clear=False):
-        assert get_available_providers()["fireworks"] is True
+        assert get_available_providers()[Provider.FIREWORKS] is True
     with mock.patch.dict(os.environ, {}, clear=False):
         os.environ.pop("FIREWORKS_API_KEY", None)
-        assert get_available_providers()["fireworks"] is False
+        assert get_available_providers()[Provider.FIREWORKS] is False
 
 
 def test_resolve_model_routes_fireworks_to_fireworks_provider() -> None:
@@ -145,14 +146,16 @@ def test_resolve_model_routes_fireworks_to_fireworks_provider() -> None:
         llm_providers,
         "get_available_providers",
         return_value={
-            "openrouter": False,
-            "openai": False,
-            "anthropic": False,
-            "google": False,
-            "fireworks": True,
+            Provider.OPENROUTER.value: False,
+            Provider.OPENAI.value: False,
+            Provider.ANTHROPIC.value: False,
+            Provider.GOOGLE.value: False,
+            Provider.FIREWORKS.value: True,
         },
     ):
-        model_id, provider = resolve_model("qwen3.7-plus", prefer_openrouter=False)
+        model_id, provider = resolve_model(
+            ModelKey.QWEN_3_7_PLUS, prefer_openrouter=False
+        )
     assert isinstance(provider, FireworksProvider)
     assert model_id == "accounts/fireworks/models/qwen3p7-plus"
 
@@ -163,11 +166,11 @@ def test_models_json_has_fireworks_default() -> None:
     fireworks = {
         name: cfg
         for name, cfg in config.items()
-        if cfg.get("provider") == "fireworks"
+        if cfg.get("provider") == Provider.FIREWORKS
     }
-    assert "qwen3.7-plus" in fireworks
+    assert ModelKey.QWEN_3_7_PLUS in fireworks
     defaults = [n for n, c in fireworks.items() if c.get("fireworks_default")]
-    assert defaults == ["qwen3.7-plus"]
+    assert defaults == [ModelKey.QWEN_3_7_PLUS]
     for cfg in fireworks.values():
         assert cfg.get("supports_vision") is True
         assert cfg["direct_id"].startswith("accounts/fireworks/models/")
@@ -179,10 +182,12 @@ def test_default_model_honors_env_override() -> None:
 
     with mock.patch.dict(os.environ, {}, clear=False):
         os.environ.pop("PDF_TO_MD_MODEL", None)
-        assert pdf_to_md._default_model() == "gpt-5.5"
-    with mock.patch.dict(os.environ, {"PDF_TO_MD_MODEL": "qwen3.7-plus"}, clear=False):
-        assert pdf_to_md._default_model() == "qwen3.7-plus"
-    assert pdf_to_md._default_fireworks_model() == "qwen3.7-plus"
+        assert pdf_to_md._default_model() == ModelKey.GPT_5_5
+    with mock.patch.dict(
+        os.environ, {"PDF_TO_MD_MODEL": ModelKey.QWEN_3_7_PLUS.value}, clear=False
+    ):
+        assert pdf_to_md._default_model() == ModelKey.QWEN_3_7_PLUS
+    assert pdf_to_md._default_fireworks_model() == ModelKey.QWEN_3_7_PLUS
 
 
 def run_all_tests() -> bool:

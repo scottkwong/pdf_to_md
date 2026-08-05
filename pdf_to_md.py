@@ -14,6 +14,8 @@ import sys
 from dotenv import load_dotenv
 from typing import Optional, Tuple, TYPE_CHECKING
 
+from models_config import ModelKey, Provider
+
 
 def _get_version() -> str:
     """Return package version from metadata, or 0.0.0.dev if not installed."""
@@ -27,8 +29,8 @@ def _get_version() -> str:
 # Overall default model when neither --model nor PDF_TO_MD_MODEL is set. To make
 # a different model your personal default, set PDF_TO_MD_MODEL in your .env
 # (e.g. PDF_TO_MD_MODEL=qwen3.7-plus) along with the matching provider key.
-DEFAULT_MODEL = "gpt-5.5"
-_FIREWORKS_FALLBACK_MODEL = "qwen3.7-plus"
+DEFAULT_MODEL = ModelKey.GPT_5_5.value
+_FIREWORKS_FALLBACK_MODEL = ModelKey.QWEN_3_7_PLUS.value
 
 
 def _default_model() -> str:
@@ -565,7 +567,7 @@ def main() -> None:
     parser.add_argument(
         "--provider",
         type=str,
-        choices=["openrouter", "openai", "anthropic", "google", "fireworks"],
+        choices=[provider.value for provider in Provider],
         default=None,
         help="Force specific provider (optional).",
     )
@@ -795,7 +797,7 @@ def main() -> None:
     # fallback menu when --fireworks is used without a key.
     if args.fireworks:
         from llm_providers import get_available_providers
-        if not get_available_providers().get("fireworks"):
+        if not get_available_providers().get(Provider.FIREWORKS):
             print(
                 "Error: --fireworks requires FIREWORKS_API_KEY. Get a key at "
                 "https://fireworks.ai and set it in your .env or environment."

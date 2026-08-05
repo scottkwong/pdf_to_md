@@ -18,6 +18,8 @@ from dotenv import load_dotenv
 from openai import OpenAI
 import google.genai as genai
 
+from models_config import Provider
+
 # Load environment variables
 load_dotenv()
 
@@ -561,19 +563,19 @@ def get_available_providers(validate_keys: bool = False) -> Dict[str, bool]:
         Dictionary mapping provider names to availability (True/False).
     """
     providers = {
-        "openrouter": bool(os.getenv("OPENROUTER_API_KEY")),
-        "openai": bool(os.getenv("OPENAI_API_KEY")),
-        "anthropic": bool(os.getenv("ANTHROPIC_API_KEY")),
-        "google": bool(
+        Provider.OPENROUTER.value: bool(os.getenv("OPENROUTER_API_KEY")),
+        Provider.OPENAI.value: bool(os.getenv("OPENAI_API_KEY")),
+        Provider.ANTHROPIC.value: bool(os.getenv("ANTHROPIC_API_KEY")),
+        Provider.GOOGLE.value: bool(
             os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
         ),
-        "fireworks": bool(os.getenv("FIREWORKS_API_KEY")),
+        Provider.FIREWORKS.value: bool(os.getenv("FIREWORKS_API_KEY")),
     }
 
     # If validate_keys is True, actually test the OpenRouter key
-    if validate_keys and providers["openrouter"]:
+    if validate_keys and providers[Provider.OPENROUTER.value]:
         api_key = os.getenv("OPENROUTER_API_KEY")
-        providers["openrouter"] = validate_openrouter_key(api_key)
+        providers[Provider.OPENROUTER.value] = validate_openrouter_key(api_key)
 
     return providers
 
@@ -609,13 +611,13 @@ def get_available_models_for_keys() -> List[Dict]:
             {
                 "name": name,
                 "display_name": openrouter_id,
-                "provider": "openrouter",
+                "provider": Provider.OPENROUTER.value,
             }
         )
         return True
 
     # If OpenRouter is available, use models with OpenRouter IDs first
-    if available["openrouter"]:
+    if available[Provider.OPENROUTER]:
         for model_name, model_config in models_config.items():
             if add_openrouter_model(model_name, model_config):
                 continue
@@ -701,20 +703,20 @@ def resolve_model(
     # Determine which provider to use
     use_openrouter = False
     openrouter_id = model_config.get("openrouter_id")
-    if prefer_openrouter and available["openrouter"] and openrouter_id:
+    if prefer_openrouter and available[Provider.OPENROUTER] and openrouter_id:
         use_openrouter = True
         model_id = openrouter_id
         provider = OpenRouterProvider()
-    elif provider_name == "openai" and available["openai"]:
+    elif provider_name == Provider.OPENAI and available[Provider.OPENAI]:
         model_id = model_config["direct_id"]
         provider = OpenAIProvider()
-    elif provider_name == "anthropic" and available["anthropic"]:
+    elif provider_name == Provider.ANTHROPIC and available[Provider.ANTHROPIC]:
         model_id = model_config["direct_id"]
         provider = AnthropicProvider()
-    elif provider_name == "google" and available["google"]:
+    elif provider_name == Provider.GOOGLE and available[Provider.GOOGLE]:
         model_id = model_config["direct_id"]
         provider = GoogleProvider()
-    elif provider_name == "fireworks" and available["fireworks"]:
+    elif provider_name == Provider.FIREWORKS and available[Provider.FIREWORKS]:
         model_id = model_config["direct_id"]
         provider = FireworksProvider()
     else:

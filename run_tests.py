@@ -26,6 +26,7 @@ from tests.test_local_ocr import run_all_tests as run_local_ocr_tests
 from tests.test_benchmark_models import run_all_tests as run_benchmark_model_tests
 from tests.test_benchmark_report import run_all_tests as run_benchmark_report_tests
 from tests.test_fireworks_provider import run_all_tests as run_fireworks_tests
+from tests.test_models_config import run_all_tests as run_models_config_tests
 
 
 def main():
@@ -64,6 +65,11 @@ def main():
     print("FIREWORKS PROVIDER TESTS")
     print("=" * 60)
     fireworks_success = run_fireworks_tests()
+
+    print("\n" + "=" * 60)
+    print("MODELS CONFIG ENUM TESTS")
+    print("=" * 60)
+    models_config_success = run_models_config_tests()
 
     # Check available providers (without validation for speed)
     available = get_available_providers(validate_keys=False)
@@ -118,6 +124,7 @@ def main():
     print(f"Local OCR: {'PASSED' if local_ocr_success else 'FAILED'}")
     print(f"Model Benchmark: {'PASSED' if benchmark_success else 'FAILED'}")
     print(f"Fireworks Provider: {'PASSED' if fireworks_success else 'FAILED'}")
+    print(f"Models Config Enums: {'PASSED' if models_config_success else 'FAILED'}")
     print(f"Text Processing: {'PASSED' if text_success else 'FAILED'}")
     print(f"Vision Processing: {'PASSED' if vision_success else 'FAILED'}")
     print(f"LlamaParse Extraction: {'PASSED' if llamaparse_success else 'FAILED'}")
@@ -129,6 +136,7 @@ def main():
         and local_ocr_success
         and benchmark_success
         and fireworks_success
+        and models_config_success
         and text_success
         and vision_success
         and llamaparse_success
