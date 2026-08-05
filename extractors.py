@@ -11,6 +11,7 @@ import base64
 import io
 import logging
 import os
+import shutil
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -447,21 +448,56 @@ class VisionExtractor(BaseExtractor):
         base_name = os.path.basename(pdf_path).rsplit(".", 1)[0]
         image_folder = os.path.join(output_dir, base_name + "_images")
 
-        if not os.path.exists(image_folder):
-            os.makedirs(image_folder)
+        cached = self._load_cached_images(image_folder)
+        if cached:
+            return cached
+
+        # Render into a staging directory and move it into place only after every
+        # page is written. Rendering straight into image_folder leaves an empty or
+        # partial cache behind if convert_from_path fails (missing poppler, corrupt
+        # PDF, interrupt) -- and since the cache was keyed on the directory merely
+        # existing, every later run would load zero pages and fail a page-count
+        # mismatch until the directory was deleted by hand.
+        staging_folder = image_folder + ".partial"
+        shutil.rmtree(staging_folder, ignore_errors=True)
+        os.makedirs(staging_folder)
+
+        try:
             images = convert_from_path(pdf_path, thread_count=os.cpu_count())
             for i, image in enumerate(images):
-                image.save(os.path.join(image_folder, f"{base_name}_image_{i}.png"))
-        else:
-            image_files = sorted(
-                [f for f in os.listdir(image_folder) if f.endswith(".png")],
-                key=lambda x: int(x.rsplit("_", 1)[-1].split(".")[0]),
-            )
-            images = [
-                Image.open(os.path.join(image_folder, f)) for f in image_files
-            ]
+                image.save(
+                    os.path.join(staging_folder, f"{base_name}_image_{i}.png")
+                )
+        except BaseException:
+            shutil.rmtree(staging_folder, ignore_errors=True)
+            raise
+
+        shutil.rmtree(image_folder, ignore_errors=True)
+        os.rename(staging_folder, image_folder)
 
         return images
+
+    @staticmethod
+    def _load_cached_images(image_folder: str) -> List[Image.Image]:
+        """
+        Load previously rendered page images from the cache directory.
+
+        Args:
+            image_folder: Directory holding cached page PNGs.
+
+        Returns:
+            Cached images, or an empty list if the directory is absent or holds
+            no PNGs. An empty result means "re-render": the directory existing is
+            not on its own proof that a usable cache was written.
+        """
+        if not os.path.isdir(image_folder):
+            return []
+
+        image_files = sorted(
+            [f for f in os.listdir(image_folder) if f.endswith(".png")],
+            key=lambda x: int(x.rsplit("_", 1)[-1].split(".")[0]),
+        )
+        return [Image.open(os.path.join(image_folder, f)) for f in image_files]
 
     def _get_prior_text(self, pdf_path: str) -> List[str]:
         """
