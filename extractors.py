@@ -21,7 +21,12 @@ logger = logging.getLogger(__name__)
 
 from pdf2image import convert_from_path
 from PIL import Image
-from tenacity import retry, stop_after_attempt, wait_random_exponential
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    stop_after_delay,
+    wait_random_exponential,
+)
 from tqdm import tqdm
 from digital_text_parsers import (
     BaseDigitalTextParser,
@@ -30,6 +35,165 @@ from digital_text_parsers import (
 
 if TYPE_CHECKING:
     from llm_providers import BaseProvider, VisionResult
+
+
+# Retry envelopes. A provider quota resets on a minute scale, so a rate-limited
+# page needs a retry window longer than that window to survive; a genuine error
+# (bad request, decode failure) should still fail fast rather than stall a run
+# for five minutes. The two policies below are selected per-exception.
+_TRANSIENT_WAIT = wait_random_exponential(min=1.0 / 5000, max=5)
+_TRANSIENT_STOP = stop_after_attempt(3)
+_RATE_LIMIT_WAIT = wait_random_exponential(multiplier=2, max=60)
+_RATE_LIMIT_STOP = stop_after_delay(300) | stop_after_attempt(12)
+
+# Concurrency for the end-of-run recovery pass. Deliberately far below the
+# default fan-out: the pages being retried are the ones a saturated quota
+# rejected, so the retry has to ask for less, not the same again.
+RECOVERY_CONCURRENCY = 3
+
+
+def is_rate_limit_error(exc: BaseException) -> bool:
+    """
+    Report whether an exception is a provider rate-limit (HTTP 429) rejection.
+
+    Detection is duck-typed rather than keyed to one SDK's exception class:
+    openai, anthropic, and google-genai all surface 429s differently, and the
+    Fireworks and OpenRouter providers reuse the openai client against other
+    hosts.
+
+    Args:
+        exc: Exception raised by a provider call.
+
+    Returns:
+        True if the exception represents a rate-limit rejection.
+    """
+    if type(exc).__name__ == "RateLimitError":
+        return True
+
+    response = getattr(exc, "response", None)
+    candidates = (
+        getattr(exc, "status_code", None),
+        getattr(exc, "code", None),
+        getattr(response, "status_code", None),
+    )
+    return any(code == 429 for code in candidates)
+
+
+def retry_after_seconds(exc: BaseException) -> Optional[float]:
+    """
+    Read the provider's Retry-After hint, in seconds, if it sent one.
+
+    Args:
+        exc: Exception raised by a provider call.
+
+    Returns:
+        Seconds to wait, or None when absent or not a plain number. HTTP-date
+        forms are ignored: these APIs send deltas, and guessing at a date parse
+        risks a wait far longer than the quota window.
+    """
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    if headers is None:
+        return None
+
+    try:
+        raw = headers.get("retry-after")
+    except AttributeError:
+        return None
+
+    if raw is None:
+        return None
+
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        return None
+
+    # Ignore nonsense (negative, or a wait longer than the whole envelope).
+    return seconds if 0 <= seconds <= 300 else None
+
+
+# Transport and server-side faults worth a second attempt. Matched by class
+# name because each SDK defines its own hierarchy.
+_TRANSIENT_ERROR_NAMES = frozenset({
+    "APIConnectionError",
+    "APITimeoutError",
+    "ConnectionError",
+    "InternalServerError",
+    "ReadTimeout",
+    "ServiceUnavailableError",
+    "Timeout",
+})
+
+
+def is_retryable_error(exc: BaseException) -> bool:
+    """
+    Report whether re-sending a page could plausibly succeed.
+
+    Throttling and transport faults are worth another attempt. A deterministic
+    fault (malformed request, auth failure, a bug in our own response handling)
+    will fail identically the second time, so retrying it only doubles the cost
+    and delay of a run that is already going to fail.
+
+    Args:
+        exc: Exception raised while processing a page.
+
+    Returns:
+        True if the failure is transient.
+    """
+    if is_rate_limit_error(exc):
+        return True
+
+    if type(exc).__name__ in _TRANSIENT_ERROR_NAMES:
+        return True
+
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    return isinstance(status, int) and status >= 500
+
+
+@dataclass
+class PageFailure:
+    """A page that failed to process, and whether a retry could help."""
+
+    index: int
+    message: str
+    retryable: bool
+
+
+def _provider_safe_concurrency(provider: object, default: int = 10) -> int:
+    """
+    Read a provider's declared safe page concurrency.
+
+    Args:
+        provider: Provider instance, which may predate MAX_SAFE_CONCURRENCY or
+            be a test double that answers any attribute.
+        default: Fallback when the provider declares nothing usable.
+
+    Returns:
+        A positive page-concurrency limit.
+    """
+    declared = getattr(provider, "MAX_SAFE_CONCURRENCY", default)
+    if isinstance(declared, bool) or not isinstance(declared, int):
+        return default
+    return declared if declared >= 1 else default
+
+
+def _wait_for_exception(retry_state) -> float:
+    """Pick the backoff envelope that matches the failure, in seconds."""
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    if exc is not None and is_rate_limit_error(exc):
+        hinted = retry_after_seconds(exc) or 0.0
+        return max(hinted, _RATE_LIMIT_WAIT(retry_state))
+    return _TRANSIENT_WAIT(retry_state)
+
+
+def _stop_for_exception(retry_state) -> bool:
+    """Stop rate-limited calls on the long envelope, others on the short one."""
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    if exc is not None and is_rate_limit_error(exc):
+        return _RATE_LIMIT_STOP(retry_state)
+    return _TRANSIENT_STOP(retry_state)
 
 
 @dataclass
@@ -84,7 +248,7 @@ class VisionExtractor(BaseExtractor):
         provider: "BaseProvider",
         model_id: str,
         mode: str = "vt",
-        max_parallel_pages: int = 10,
+        max_parallel_pages: Optional[int] = None,
         digital_text_parser: str = "auto",
     ):
         """
@@ -95,13 +259,19 @@ class VisionExtractor(BaseExtractor):
             model_id: Model identifier for the provider.
             mode: Processing mode - 'v' for vision-only, 'vt' for vision-and-text.
             max_parallel_pages: Maximum number of pages to process in parallel.
+                None resolves to the provider's MAX_SAFE_CONCURRENCY, so a
+                provider with a tight quota is not fanned out into throttling.
             digital_text_parser: Parser engine used for first-pass digital text
                 parsing in 'vt' mode. Valid values are auto, pypdf, pymupdf.
         """
         self.provider = provider
         self.model_id = model_id
         self.mode = mode
-        self.max_parallel_pages = max_parallel_pages
+        self.max_parallel_pages = (
+            max_parallel_pages
+            if max_parallel_pages is not None
+            else _provider_safe_concurrency(provider)
+        )
         self._digital_text_parser_selection = create_digital_text_parser(
             digital_text_parser
         )
@@ -166,6 +336,12 @@ class VisionExtractor(BaseExtractor):
         results, failed_pages = self._process_pages_parallel(
             images, prior_texts, pdf_file_name, verbose
         )
+
+        # Give throttled pages a second chance before they become placeholders
+        if failed_pages:
+            results, failed_pages = self._recover_failed_pages(
+                images, prior_texts, pdf_file_name, verbose, results, failed_pages
+            )
 
         # Log any errors
         self._log_processing_errors(failed_pages, len(images), results)
@@ -237,15 +413,23 @@ class VisionExtractor(BaseExtractor):
         prior_texts: List[Optional[str]],
         pdf_file_name: str,
         verbose: bool,
+        page_indices: Optional[List[int]] = None,
+        max_workers: Optional[int] = None,
+        desc: str = "Processing pages",
     ) -> tuple[dict[int, str], list[tuple[int, str]]]:
         """
-        Process all pages in parallel using ThreadPoolExecutor.
+        Process pages in parallel using ThreadPoolExecutor.
 
         Args:
             images: List of page images.
             prior_texts: List of prior text for each page.
             pdf_file_name: Name of the PDF file for headers.
             verbose: Whether to show progress bar.
+            page_indices: Page indices to process. Defaults to every page; the
+                recovery sweep passes just the pages that failed.
+            max_workers: Concurrency for this pass. Defaults to the extractor's
+                max_parallel_pages.
+            desc: Progress bar label.
 
         Returns:
             Tuple of (results dict, failed_pages list).
@@ -255,28 +439,30 @@ class VisionExtractor(BaseExtractor):
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         total_pages = len(images)
+        indices = (
+            list(range(total_pages)) if page_indices is None else list(page_indices)
+        )
+        workers = max(1, max_workers or self.max_parallel_pages)
         results: dict[int, str] = {}
         failed_pages: list[tuple[int, str]] = []
 
         logger.debug(
-            f"Starting parallel extraction: {total_pages} pages, "
-            f"max_workers={self.max_parallel_pages}"
+            f"Starting parallel extraction: {len(indices)} of {total_pages} "
+            f"pages, max_workers={workers}"
         )
 
-        with ThreadPoolExecutor(max_workers=self.max_parallel_pages) as executor:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {
                 executor.submit(
-                    self._process_single_page, ix, img, txt, pdf_file_name,
-                    total_pages
+                    self._process_single_page, ix, images[ix], prior_texts[ix],
+                    pdf_file_name, total_pages
                 ): ix
-                for ix, (img, txt) in enumerate(zip(images, prior_texts))
+                for ix in indices
             }
 
             iterator = as_completed(futures)
             if verbose:
-                iterator = tqdm(
-                    iterator, total=len(futures), desc="Processing pages"
-                )
+                iterator = tqdm(iterator, total=len(futures), desc=desc)
 
             for future in iterator:
                 page_index = futures[future]
@@ -288,12 +474,86 @@ class VisionExtractor(BaseExtractor):
                         f"(completed {len(results)}/{total_pages})"
                     )
                 except Exception as e:
-                    failed_pages.append((page_index, str(e)))
+                    failed_pages.append(
+                        PageFailure(page_index, str(e), is_retryable_error(e))
+                    )
                     logger.error(
                         f"FAILED: Page {page_index + 1} failed to process: {e}"
                     )
 
         return results, failed_pages
+
+    def _recover_failed_pages(
+        self,
+        images: List[Image.Image],
+        prior_texts: List[Optional[str]],
+        pdf_file_name: str,
+        verbose: bool,
+        results: dict[int, str],
+        failed_pages: list[PageFailure],
+    ) -> tuple[dict[int, str], list[PageFailure]]:
+        """
+        Re-run the transiently-failed pages, once, at reduced concurrency.
+
+        A block of mid-run failures is usually provider throttling rather than
+        bad pages: the worker pool saturates a per-minute quota and every
+        in-flight request is rejected together. The quota window has normally
+        reset by the time the first pass ends, so one narrow retry recovers
+        pages that would otherwise be written out as [ERROR] placeholders.
+
+        Args:
+            images: List of page images.
+            prior_texts: List of prior text for each page.
+            pdf_file_name: Name of the PDF file for headers.
+            verbose: Whether to show progress.
+            results: Results collected so far, updated in place with recoveries.
+            failed_pages: Pages that failed the first pass.
+
+        Returns:
+            Tuple of (results dict, still-failing pages).
+        """
+        retryable = [failure for failure in failed_pages if failure.retryable]
+        permanent = [failure for failure in failed_pages if not failure.retryable]
+
+        if not retryable:
+            logger.info(
+                f"No recovery pass: all {len(permanent)} failure(s) are "
+                f"deterministic, so a retry would fail identically"
+            )
+            return results, failed_pages
+
+        retry_indices = [failure.index for failure in retryable]
+        retry_workers = max(1, min(RECOVERY_CONCURRENCY, self.max_parallel_pages))
+
+        logger.info(
+            f"Retrying {len(retry_indices)} transiently-failed page(s) at "
+            f"max_workers={retry_workers}"
+        )
+        if verbose:
+            print(
+                f"\n{len(retry_indices)} page(s) hit throttling or a transport "
+                f"error; retrying at {retry_workers}-way concurrency."
+            )
+
+        recovered, still_failed = self._process_pages_parallel(
+            images,
+            prior_texts,
+            pdf_file_name,
+            verbose,
+            page_indices=retry_indices,
+            max_workers=retry_workers,
+            desc="Retrying failed pages",
+        )
+
+        results.update(recovered)
+        logger.info(
+            f"Recovery pass: {len(recovered)} recovered, "
+            f"{len(still_failed)} still failing"
+        )
+
+        remaining = permanent + still_failed
+        remaining.sort(key=lambda failure: failure.index)
+        return results, remaining
 
     def _process_single_page(
         self,
@@ -354,7 +614,7 @@ class VisionExtractor(BaseExtractor):
 
     def _log_processing_errors(
         self,
-        failed_pages: list[tuple[int, str]],
+        failed_pages: list[PageFailure],
         total_pages: int,
         results: dict[int, str],
     ) -> None:
@@ -362,18 +622,18 @@ class VisionExtractor(BaseExtractor):
         Log errors for failed or missing pages.
 
         Args:
-            failed_pages: List of (page_index, error_message) tuples.
+            failed_pages: Pages that failed after any recovery pass.
             total_pages: Expected total number of pages.
             results: Dict of successfully processed pages.
         """
         if failed_pages:
-            failed_nums = [p + 1 for p, _ in failed_pages]
+            failed_nums = [failure.index + 1 for failure in failed_pages]
             logger.error(
                 f"PAGE PROCESSING ERRORS: {len(failed_pages)} of {total_pages} "
                 f"pages failed to process. Failed pages: {failed_nums}"
             )
-            for page_idx, error_msg in failed_pages:
-                logger.error(f"  Page {page_idx + 1}: {error_msg}")
+            for failure in failed_pages:
+                logger.error(f"  Page {failure.index + 1}: {failure.message}")
 
         expected_pages = set(range(total_pages))
         received_pages = set(results.keys())
@@ -527,8 +787,9 @@ class VisionExtractor(BaseExtractor):
         return base64.b64encode(byte_data).decode("utf-8")
 
     @retry(
-        wait=wait_random_exponential(min=1.0 / 5000, max=5),
-        stop=stop_after_attempt(3),
+        wait=_wait_for_exception,
+        stop=_stop_for_exception,
+        reraise=True,
     )
     def _process_image_with_provider(
         self,

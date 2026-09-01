@@ -234,7 +234,7 @@ To utilize additional options:
 - `-q`, `--quiet`: Disables verbose output. By default, the script prints markdown to console.
 - `-r`, `--recursive`: Processes all PDF files within the target directory recursively. Files are processed in parallel by default.
 - `-s`, `--single`: Process files sequentially instead of in parallel when using `-r`.
-- `-p`, `--parallel [N]`: Max parallel pages to process with VisionExtractor (default: 10). Controls how many pages are processed concurrently.
+- `-p`, `--parallel [N]`: Max parallel pages to process with VisionExtractor. Controls how many pages are processed concurrently. Defaults to the resolved provider's safe concurrency: 10 for most, but 3 for Fireworks, whose per-minute quota rejects a wider fan-out partway through a long document. The run prints the resolved value as `Page concurrency`.
 - `-d`, `--debug`: Enable debug logging for page processing order. Useful for diagnosing page ordering issues.
 - `--extractor <extractor>`: Extraction method: `vision` (default, LLM-based) or `llamaparse` (LlamaCloud API). Ignored when `--local` is set.
 - `--local`: Run OCR fully offline against a local [Ollama](https://ollama.com) server. No API keys and no per-token cost.
@@ -496,6 +496,12 @@ Default model is `qwen3.7-plus` (Qwen 3.7 Plus) — Alibaba's flagship multimoda
   --benchmark-models "gpt-5.5,claude-opus-4.6,qwen3.7-plus,local" \
   --benchmark-pdf document.pdf
 ```
+
+**Rate limits.** Fireworks' default serverless quota is well below the OpenAI tiers this tool was originally tuned against, and vision requests carry large image payloads. Long documents at a wide fan-out saturate the per-minute quota partway through, after which every in-flight and queued page is rejected together. Three things keep that from costing you pages:
+
+- Page concurrency defaults to 3 for Fireworks rather than 10. Override with `-p` if your account has a higher quota.
+- A page rejected with HTTP 429 backs off for up to five minutes, honoring the provider's `Retry-After`, instead of giving up inside the same quota window. Deterministic failures still fail fast.
+- Any page still failing after the main pass is retried once at low concurrency before it becomes an `[ERROR: Page N failed to process]` placeholder. Only throttling and transport faults are retried; a genuine error is not re-sent at double cost.
 
 ## Testing
 
