@@ -42,6 +42,13 @@ class VisionResult:
 class BaseProvider(ABC):
     """Abstract base class for LLM providers."""
 
+    # Page-level concurrency this provider's default quota tolerates. Vision
+    # requests carry large image payloads, so a fan-out that a high-tier
+    # OpenAI account absorbs will saturate a smaller per-minute quota and 429
+    # every in-flight request at once. Providers with tighter limits lower it;
+    # an explicit --parallel always wins.
+    MAX_SAFE_CONCURRENCY = 10
+
     @abstractmethod
     def process_vision(
         self,
@@ -166,6 +173,12 @@ class FireworksProvider(BaseProvider):
     """
 
     BASE_URL = "https://api.fireworks.ai/inference/v1"
+
+    # Fireworks' default serverless quota is well below the OpenAI tiers this
+    # tool was originally tuned against. At 10-way fan-out a long PDF saturates
+    # the per-minute limit partway through and the rest of the run 429s in a
+    # block; 3 sustained a 199-page deck without throttling.
+    MAX_SAFE_CONCURRENCY = 3
 
     # Reasoning models (e.g. qwen3p7-plus) spend completion budget on thinking
     # before the answer, so dense pages truncate mid-thought at 4096. Request

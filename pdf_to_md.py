@@ -92,7 +92,7 @@ def create_extractor(
     llamaparse_tier: str = "agentic",
     language: str = "en",
     verbose: bool = False,
-    max_parallel_pages: int = 10,
+    max_parallel_pages: Optional[int] = None,
     local_model: str = "qwen2.5vl:7b",
     ollama_url: str = "http://localhost:11434/api/generate",
     local_num_ctx: int = 16384,
@@ -112,6 +112,7 @@ def create_extractor(
         language: Document language for LlamaParse extractor.
         verbose: Enable verbose logging.
         max_parallel_pages: Max pages to process in parallel (VisionExtractor).
+            None resolves to the provider's safe concurrency.
         local_model: Ollama model tag for the local extractor.
         ollama_url: Ollama generate endpoint for the local extractor.
         local_num_ctx: Context window in tokens for the local extractor.
@@ -287,7 +288,10 @@ def print_cli_configuration(args: argparse.Namespace, model: str) -> None:
         print(f"  Output budget:      {args.local_num_predict} tokens/page")
         print(f"  Mode:               {args.mode}")
         print(f"  Digital parser:     {args.digital_text_parser}")
-        print(f"  Parallel pages:     {args.parallel}")
+        print(
+            f"  Parallel pages:     "
+            f"{args.parallel if args.parallel else 'auto (provider default)'}"
+        )
     elif args.extractor == "llamaparse":
         print(f"  LlamaParse tier:    {args.llamaparse_tier}")
         print(f"  Language:           {args.language}")
@@ -297,7 +301,10 @@ def print_cli_configuration(args: argparse.Namespace, model: str) -> None:
         print(f"  Model:              {model}")
         print(f"  Provider override:  {args.provider or '(none - auto-detect)'}")
         print(f"  Prefer OpenRouter:  {args.prefer_openrouter}")
-        print(f"  Parallel pages:     {args.parallel}")
+        print(
+            f"  Parallel pages:     "
+            f"{args.parallel if args.parallel else 'auto (provider default)'}"
+        )
     if args.benchmark:
         benchmark_target = (
             args.benchmark_pdf
@@ -322,7 +329,7 @@ def print_cli_configuration(args: argparse.Namespace, model: str) -> None:
 
 
 def print_model_resolution(
-    model: str, prefer_openrouter: bool
+    model: str, prefer_openrouter: bool, max_parallel_pages: Optional[int] = None
 ) -> None:
     """
     Print model resolution information based on API key availability.
@@ -330,6 +337,8 @@ def print_model_resolution(
     Args:
         model: Model identifier to resolve.
         prefer_openrouter: Whether to prefer OpenRouter when available.
+        max_parallel_pages: Explicit --parallel value, or None to report the
+            concurrency the resolved provider declares as safe.
     """
     from llm_providers import (
         OpenRouterProvider,
@@ -363,6 +372,16 @@ def print_model_resolution(
         print(f"  Actual model ID:   {model_id}")
         print(f"  Provider:          {provider_name}")
         print(f"  Via OpenRouter:   {using_openrouter}")
+
+        from extractors import _provider_safe_concurrency
+
+        if max_parallel_pages is None:
+            concurrency = _provider_safe_concurrency(provider)
+            origin = f"{provider_name} default"
+        else:
+            concurrency = max_parallel_pages
+            origin = "explicit --parallel"
+        print(f"  Page concurrency:  {concurrency} ({origin})")
     except Exception as e:
         print(f"  ✗ Error resolving model: {e}")
         sys.exit(1)
@@ -600,8 +619,12 @@ def main() -> None:
         type=int,
         nargs="?",
         const=10,
-        default=10,
-        help="Max parallel pages to process with VisionExtractor (default: 10).",
+        default=None,
+        help=(
+            "Max parallel pages to process with VisionExtractor. Defaults to "
+            "the resolved provider's safe concurrency (10 for most, 3 for "
+            "Fireworks, whose per-minute quota 429s a wider fan-out)."
+        ),
     )
     parser.add_argument(
         "-s",
@@ -940,7 +963,7 @@ def main() -> None:
             sys.exit(1)
     else:
         # Vision-based extraction - resolve model
-        print_model_resolution(model, prefer_openrouter)
+        print_model_resolution(model, prefer_openrouter, args.parallel)
         extractor = create_extractor(
             extractor_type="vision",
             model=model,
