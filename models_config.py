@@ -47,6 +47,7 @@ class ModelKey(str, Enum):
     CLAUDE_OPUS_4_6 = "claude-opus-4.6"
     CLAUDE_HAIKU_4_5 = "claude-haiku-4.5"
     QWEN_3_7_PLUS = "qwen3.7-plus"
+    QWEN_3_8_MAX = "qwen3.8-max"
 
     __str__ = str.__str__  # f"{ModelKey.GPT_5_5}" -> "gpt-5.5", not the repr
 

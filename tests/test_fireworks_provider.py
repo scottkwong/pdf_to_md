@@ -169,6 +169,7 @@ def test_models_json_has_fireworks_default() -> None:
         if cfg.get("provider") == Provider.FIREWORKS
     }
     assert ModelKey.QWEN_3_7_PLUS in fireworks
+    assert ModelKey.QWEN_3_8_MAX in fireworks
     defaults = [n for n, c in fireworks.items() if c.get("fireworks_default")]
     assert defaults == [ModelKey.QWEN_3_7_PLUS]
     for cfg in fireworks.values():
