@@ -171,7 +171,7 @@ def test_models_json_has_fireworks_default() -> None:
     assert ModelKey.QWEN_3_7_PLUS in fireworks
     assert ModelKey.QWEN_3_8_MAX in fireworks
     defaults = [n for n, c in fireworks.items() if c.get("fireworks_default")]
-    assert defaults == [ModelKey.QWEN_3_7_PLUS]
+    assert defaults == [ModelKey.QWEN_3_8_MAX]
     for cfg in fireworks.values():
         assert cfg.get("supports_vision") is True
         assert cfg["direct_id"].startswith("accounts/fireworks/models/")
@@ -188,7 +188,7 @@ def test_default_model_honors_env_override() -> None:
         os.environ, {"PDF_TO_MD_MODEL": ModelKey.QWEN_3_7_PLUS.value}, clear=False
     ):
         assert pdf_to_md._default_model() == ModelKey.QWEN_3_7_PLUS
-    assert pdf_to_md._default_fireworks_model() == ModelKey.QWEN_3_7_PLUS
+    assert pdf_to_md._default_fireworks_model() == ModelKey.QWEN_3_8_MAX
 
 
 def run_all_tests() -> bool:
