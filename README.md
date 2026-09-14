@@ -185,15 +185,15 @@ Convert PDF files to Markdown format using LLM vision models. It supports proces
 
 The tool uses **direct provider APIs by default** (not OpenRouter). Pass `--prefer-openrouter` to route through OpenRouter instead when `OPENROUTER_API_KEY` is set. If the requested model's key is missing, you'll be prompted to pick from the models your available keys support.
 
-**Change the default locally (no code edits):** set `PDF_TO_MD_MODEL` in your `.env` (or shell) to any `models.json` key, and provide the matching provider key. This is what `--model` falls back to when you don't pass it. For example, to make Fireworks' Qwen 3.7 Plus your personal default:
+**Change the default locally (no code edits):** set `PDF_TO_MD_MODEL` in your `.env` (or shell) to any `models.json` key, and provide the matching provider key. This is what `--model` falls back to when you don't pass it. For example, to make Fireworks' Qwen 3.8 Max your personal default:
 
 ```bash
 # .env
 FIREWORKS_API_KEY=your_fireworks_key_here
-PDF_TO_MD_MODEL=qwen3.7-plus
+PDF_TO_MD_MODEL=qwen3.8-max
 ```
 
-Now `./pdf_to_md.py document.pdf` runs on Fireworks Qwen 3.7 Plus with no flags. `--model` / `--fireworks` / `--local` still override it per run. Run `./pdf_to_md.py --list-models` to see every model and which is the default.
+Now `./pdf_to_md.py document.pdf` runs on Fireworks Qwen 3.8 Max with no flags. `--model` / `--fireworks` / `--local` still override it per run. Run `./pdf_to_md.py --list-models` to see every model and which is the default.
 
 The PDF pipeline is:
 
@@ -229,8 +229,8 @@ To utilize additional options:
 - `--model <model>`: Model identifier from `models.json` to use for both vision and text processing (default: `gpt-5.5`, or the `PDF_TO_MD_MODEL` env var if set).
 - `--provider <provider>`: Force specific provider: `openrouter`, `openai`, `anthropic`, `google`, or `fireworks` (optional).
 - `--prefer-openrouter`: Route via OpenRouter when available. Default is to use direct provider APIs.
-- `--fireworks`: Use Fireworks AI with a capable multimodal model (default `qwen3.7-plus`). Requires `FIREWORKS_API_KEY`. Shortcut for `--model <fireworks-model>`.
-- `--fireworks-model <model>`: Which Fireworks model (`models.json` key) `--fireworks` uses. Default `qwen3.7-plus`.
+- `--fireworks`: Use Fireworks AI with a capable multimodal model (default `qwen3.8-max`). Requires `FIREWORKS_API_KEY`. Shortcut for `--model <fireworks-model>`.
+- `--fireworks-model <model>`: Which Fireworks model (`models.json` key) `--fireworks` uses. Default `qwen3.8-max`.
 - `-q`, `--quiet`: Disables verbose output. By default, the script prints markdown to console.
 - `-r`, `--recursive`: Processes all PDF files within the target directory recursively. Files are processed in parallel by default.
 - `-s`, `--single`: Process files sequentially instead of in parallel when using `-r`.
@@ -261,12 +261,14 @@ To utilize additional options:
 - `claude-opus-4.5` - Anthropic Claude Opus 4.5
 - `claude-opus-4.6` - Anthropic Claude Opus 4.6
 - `claude-haiku-4.5` - Anthropic Claude Haiku 4.5
-- `qwen3.7-plus` - Qwen 3.7 Plus (multimodal flagship) via Fireworks (default for `--fireworks`)
+- `qwen3.8-max` - Qwen 3.8 Max (multimodal flagship) via Fireworks (default for `--fireworks`)
+- `qwen3.7-plus` - Qwen 3.7 Plus via Fireworks (prior default; Fireworks decommissioned the serverless endpoint 2026.08.27)
 
 **Model quality notes** (2026.08.05, 10-page slide-deck benchmark):
 - The top-tier OpenAI model (`gpt-5.5`) is generally the best.
 - `qwen3.7-plus` via Fireworks is slightly worse than `gpt-5.5`, at ~12% of the cost.
 - Local `qwen3-vl:8b` (Ollama, `--local`) is noticeably worse than `qwen3.7-plus`, but it's local and free, and better than local `qwen2.5vl:7b`.
+- `qwen3.8-max` matched `qwen3.7-plus` on extraction recall (98.5% / 100% / 96.8%) and table structure across 3 dense pages, at 2.9x the cost (2026.09.01, separate measurement). It is the `--fireworks` default because Fireworks decommissioned the `qwen3.7-plus` serverless endpoint, not because it extracts better.
 
 **Examples:**
 
@@ -284,7 +286,7 @@ To utilize additional options:
 ./pdf_to_md.py document.pdf --fireworks
 
 # Use a specific Fireworks model
-./pdf_to_md.py document.pdf --fireworks --fireworks-model qwen3.7-plus
+./pdf_to_md.py document.pdf --fireworks --fireworks-model qwen3.8-max
 
 # Route via OpenRouter instead of direct provider APIs
 ./pdf_to_md.py document.pdf --model claude-sonnet-4.5 --prefer-openrouter
@@ -488,12 +490,16 @@ Each model in `models.json` has a home provider. The tool routes to it based on 
 ./pdf_to_md.py document.pdf --fireworks
 ```
 
-Default model is `qwen3.7-plus` (Qwen 3.7 Plus) — Alibaba's flagship multimodal model, served **serverless** (pay-per-token) on Fireworks with image input, so it works with just a key. It is a *reasoning* model (thinking mode), which adds latency and billed output tokens versus a plain OCR model; the reasoning is returned in a separate field, so extracted markdown stays clean. The Qwen3-VL *instruct* family (8B/32B/235B) is **not** offered here: Fireworks' serverless catalog does not include those models — they require an on-demand GPU deployment, which a plain API key can't call. `qwen3.7-plus` is the only serverless Qwen vision option. Fireworks models are plain `models.json` keys, so they work anywhere a model is accepted, including `--benchmark`:
+Default model is `qwen3.8-max` (Qwen 3.8 Max) — Alibaba's flagship multimodal model, served **serverless** (pay-per-token) on Fireworks with image input, so it works with just a key. It is a *reasoning* model (thinking mode), which adds latency and billed output tokens versus a plain OCR model; the reasoning is returned in a separate field, so extracted markdown stays clean. The Qwen3-VL *instruct* family (8B/32B/235B) is **not** offered here: Fireworks' serverless catalog does not include those models — they require an on-demand GPU deployment, which a plain API key can't call.
+
+It replaced `qwen3.7-plus`, which Fireworks decommissioned as a serverless endpoint on 2026.08.27. That key is still registered and selectable with `--fireworks-model qwen3.7-plus` for as long as the endpoint answers, but it is no longer the default. Note the cost step-up: $2.00/$6.00 per Mtok versus $0.40/$1.60, so a run costs roughly 3x what it did.
+
+Fireworks models are plain `models.json` keys, so they work anywhere a model is accepted, including `--benchmark`:
 
 ```bash
-# Benchmark Fireworks Qwen 3.7 Plus against OpenAI, Anthropic, and a local model
+# Benchmark Fireworks Qwen 3.8 Max against OpenAI, Anthropic, and a local model
 ./pdf_to_md.py --benchmark \
-  --benchmark-models "gpt-5.5,claude-opus-4.6,qwen3.7-plus,local" \
+  --benchmark-models "gpt-5.5,claude-opus-4.6,qwen3.8-max,local" \
   --benchmark-pdf document.pdf
 ```
 
